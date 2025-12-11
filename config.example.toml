@@ -1,0 +1,27 @@
+# Example configuration file for grow-a-cache
+# Copy this file to config.toml and modify as needed
+
+[server]
+# Address and port to listen on
+listen = "127.0.0.1:11211"
+
+# Number of worker threads (defaults to number of CPU cores)
+# workers = 4
+
+[storage]
+# Maximum memory usage in bytes (default: 64MB)
+# 64MB = 67108864
+# 128MB = 134217728
+# 256MB = 268435456
+# 1GB = 1073741824
+max_memory = 67108864
+
+# Default TTL for items in seconds (0 = no expiration unless specified)
+default_ttl = 0
+
+# How often to run expiration cleanup, in seconds
+cleanup_interval = 60
+
+[logging]
+# Log level: trace, debug, info, warn, error
+level = "info"
