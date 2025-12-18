@@ -1,5 +1,16 @@
 # grow-a-cache
 
+## Preamble
+This whole project is part of my experiment to build a production-grade cache backend without writing a single line of source code myself. I do not yet know how far this could get me, but that's why it'll be fun to find out.
+
+My high level plan is to start with "vibe-coding", i.e. a very terse description without many qualifiers or full requirements, and iterate toward something suitable for production, which means scalability, robustness, debuggability, configurability, and many more properties we demand in a real service.
+
+I choose cache as my target because I'm an expert in caching, so I can judge things pretty well. And I've built several projects over the years, so I also have some thoughts on how to guide a new project in the right direction. Let's see if such guidance works on LLMs as well, and what things that are easy/hard for humans end up being hard/easy for LLM.
+
+Share your thoughts by filing an issue.
+
+## V0 prompt
+
 A memcached-compatible cache server written in Rust, implementing the text protocol.
 
 ## Features
