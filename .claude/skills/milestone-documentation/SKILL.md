@@ -99,9 +99,6 @@ The prompt/requirements this version was built against. (These evolve across ver
 
 ## Design Review
 
-### Strengths
-What the design gets right.
-
 ### Limitations
 Intrinsic issues—things that are objectively problematic or suboptimal given current requirements.
 
@@ -109,9 +106,6 @@ Intrinsic issues—things that are objectively problematic or suboptimal given c
 Implicit assumptions that could break under different conditions.
 
 ## Implementation Review
-
-### Code Quality
-Objective assessment: correctness, clarity, edge cases, error handling.
 
 ### Gaps
 Missing functionality, incomplete error paths, untested scenarios.
