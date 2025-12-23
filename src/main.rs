@@ -1,13 +1,17 @@
-//! grow-a-cache: A memcached-compatible cache server
+//! grow-a-cache: A multi-protocol cache server
 //!
-//! This server implements the memcached text protocol and provides:
-//! - Key-value storage with get, set, add, replace, delete, gets, cas
+//! This server supports multiple cache protocols:
+//! - Memcached text protocol
+//! - Redis RESP protocol
+//!
+//! Features:
+//! - Key-value storage with get, set, delete, cas
 //! - Automatic key expiration
 //! - Memory usage capping with LRU eviction
 //! - Configuration via CLI arguments or TOML file
 
 mod config;
-mod protocol;
+mod protocols;
 mod server;
 mod storage;
 
@@ -32,6 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!(
         listen = %config.listen,
+        protocol = ?config.protocol,
         max_memory_mb = config.max_memory / 1024 / 1024,
         default_ttl = config.default_ttl,
         "Starting grow-a-cache server"

@@ -3,9 +3,20 @@
 //! Supports both command-line arguments and TOML configuration file.
 //! CLI arguments take precedence over config file values.
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use serde::Deserialize;
 use std::path::PathBuf;
+
+/// Protocol type for the server
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProtocolType {
+    /// Memcached text protocol
+    #[default]
+    Memcached,
+    /// Redis RESP protocol
+    Resp,
+}
 
 /// Command-line arguments for the cache server
 #[derive(Parser, Debug)]
@@ -37,6 +48,10 @@ pub struct CliArgs {
     /// Log level (trace, debug, info, warn, error)
     #[arg(long, default_value = "info")]
     pub log_level: String,
+
+    /// Protocol to use (memcached or resp)
+    #[arg(long, value_enum, default_value = "memcached")]
+    pub protocol: ProtocolType,
 }
 
 /// TOML configuration file structure
@@ -58,6 +73,9 @@ pub struct ServerConfig {
     pub listen: String,
     /// Number of worker threads
     pub workers: Option<usize>,
+    /// Protocol to use
+    #[serde(default)]
+    pub protocol: ProtocolType,
 }
 
 impl Default for ServerConfig {
@@ -65,6 +83,7 @@ impl Default for ServerConfig {
         Self {
             listen: default_listen(),
             workers: None,
+            protocol: ProtocolType::default(),
         }
     }
 }
@@ -135,6 +154,7 @@ pub struct Config {
     pub cleanup_interval: u64,
     pub workers: Option<usize>,
     pub log_level: String,
+    pub protocol: ProtocolType,
 }
 
 impl Config {
@@ -170,6 +190,11 @@ impl Config {
                 cli.log_level
             } else {
                 toml_config.logging.level
+            },
+            protocol: if cli.protocol != ProtocolType::default() {
+                cli.protocol
+            } else {
+                toml_config.server.protocol
             },
         })
     }
