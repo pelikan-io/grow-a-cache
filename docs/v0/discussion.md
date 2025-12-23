@@ -73,6 +73,6 @@ Examined Pelikan's architecture as reference for future scaling:
 <details>
 <summary>Complete conversation log</summary>
 
-See [DISCUSSION.md](/DISCUSSION.md) in repository root for the complete v0 research discussion.
+See [transcript.md](transcript.md) for the complete v0 research discussion.
 
 </details>
