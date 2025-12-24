@@ -26,9 +26,7 @@ graph TD
 - **server**: Protocol-agnostic TCP server that accepts connections, manages connection limits via semaphore, dispatches to the configured protocol handler, and runs a background expiration cleanup task.
 
 - **protocols**: Parent module that re-exports protocol-specific handlers; each protocol is a self-contained vertical slice.
-
-- **protocols/memcached**: Memcached text protocol implementation with parser (commands, responses) and handler (command execution against storage).
-
-- **protocols/resp**: Redis RESP2/3 protocol implementation with parser (frame types) and handler (GET, SET, DEL, PING, HELLO, COMMAND).
+  - **memcached**: Memcached text protocol implementation with parser (commands, responses) and handler (command execution against storage).
+  - **resp**: Redis RESP2/3 protocol implementation with parser (frame types) and handler (GET, SET, DEL, PING, HELLO, COMMAND).
 
 - **storage**: Thread-safe in-memory key-value store with automatic expiration, LRU eviction when memory limits are reached, and CAS (compare-and-swap) support.
