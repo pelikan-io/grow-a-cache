@@ -133,10 +133,11 @@ Prioritized list of what to fix or reconsider.
 
 1. **Planning doc** — Created during brainstorming (may already exist in `docs/plans/`)
 2. **Implementation** — Code written, tests passing
-3. **Discussion doc** — Summarize the conversation that led to this milestone
-4. **Critique doc** — Write retrospective after implementation complete
-5. **Consolidate** — Move planning doc to `docs/v{N}/planning.md` if needed
-6. **Tag** — `git tag v{N}` and push
+3. **Architecture diagram** — Update `docs/architecture.md` if module structure changed (use `documentation` skill)
+4. **Discussion doc** — Summarize the conversation that led to this milestone
+5. **Critique doc** — Write retrospective after implementation complete
+6. **Consolidate** — Move planning doc to `docs/v{N}/planning.md` if needed
+7. **Tag** — `git tag v{N}` and push
 
 ## Notes
 
