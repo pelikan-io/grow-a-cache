@@ -4,7 +4,7 @@
 //! then we perform non-blocking read/write syscalls.
 
 use crate::config::Config;
-use crate::runtime::protocol::{process_memcached, process_resp};
+use crate::runtime::protocol::{process_echo, process_memcached, process_ping, process_resp};
 use crate::runtime::{BufferPool, ConnState, ProcessResult, Protocol};
 use crate::storage::Storage;
 use mio::net::{TcpListener, TcpStream};
@@ -269,6 +269,8 @@ fn handle_readable(
     let result = match protocol {
         Protocol::Memcached => process_memcached(&input_copy, write_buf, storage),
         Protocol::Resp => process_resp(&input_copy, write_buf, storage),
+        Protocol::Ping => process_ping(&input_copy, write_buf, storage),
+        Protocol::Echo => process_echo(&input_copy, write_buf, storage),
     };
 
     // Re-borrow connection after buffer operations

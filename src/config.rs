@@ -16,6 +16,10 @@ pub enum ProtocolType {
     Memcached,
     /// Redis RESP protocol
     Resp,
+    /// Ping protocol (responds PONG to PING, for health checks and latency testing)
+    Ping,
+    /// Echo protocol (echoes back input, for throughput testing with varied sizes)
+    Echo,
 }
 
 /// Runtime backend for the server

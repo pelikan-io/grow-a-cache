@@ -43,6 +43,8 @@ pub fn run(config: Config) -> std::io::Result<()> {
     let protocol = match config.protocol {
         ProtocolType::Memcached => Protocol::Memcached,
         ProtocolType::Resp => Protocol::Resp,
+        ProtocolType::Ping => Protocol::Ping,
+        ProtocolType::Echo => Protocol::Echo,
     };
 
     #[cfg(target_os = "linux")]

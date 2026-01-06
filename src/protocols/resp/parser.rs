@@ -185,9 +185,7 @@ fn parse_bulk_string(buffer: &[u8]) -> ParseResult {
 
         let len: i64 = match len_str.parse() {
             Ok(n) => n,
-            Err(_) => {
-                return ParseResult::Error(format!("Invalid bulk string length: {len_str}"))
-            }
+            Err(_) => return ParseResult::Error(format!("Invalid bulk string length: {len_str}")),
         };
 
         // Null bulk string

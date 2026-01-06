@@ -4,7 +4,7 @@
 //! protocol handler based on configuration.
 
 use crate::config::{Config, ProtocolType};
-use crate::protocols::{memcached, resp};
+use crate::protocols::{echo, memcached, ping, resp};
 use crate::storage::Storage;
 use std::sync::Arc;
 use std::time::Duration;
@@ -68,6 +68,8 @@ impl Server {
                                 memcached::handle_connection(stream, storage).await
                             }
                             ProtocolType::Resp => resp::handle_connection(stream, storage).await,
+                            ProtocolType::Ping => ping::handle_connection(stream, storage).await,
+                            ProtocolType::Echo => echo::handle_connection(stream, storage).await,
                         };
 
                         if let Err(e) = result {

@@ -13,6 +13,8 @@ use std::sync::Arc;
 pub enum Protocol {
     Memcached,
     Resp,
+    Ping,
+    Echo,
 }
 
 /// Result of processing a buffer.
@@ -125,6 +127,126 @@ pub fn process_resp(input: &[u8], output: &mut [u8], storage: &Arc<Storage>) -> 
         resp_parser::ParseResult::Incomplete => ProcessResult::NeedData,
         resp_parser::ParseResult::Error(_) => ProcessResult::Error,
     }
+}
+
+/// Process a Ping protocol buffer.
+///
+/// Simple line-based protocol:
+/// - `PING\r\n` → `PONG\r\n`
+/// - `PING <msg>\r\n` → `PONG <msg>\r\n`
+/// - `QUIT\r\n` → close connection
+#[allow(unused_variables)]
+pub fn process_ping(input: &[u8], output: &mut [u8], storage: &Arc<Storage>) -> ProcessResult {
+    // Find line ending
+    let line_end = match find_crlf(input) {
+        Some(pos) => pos,
+        None => return ProcessResult::NeedData,
+    };
+
+    let line = &input[..line_end];
+    let consumed = line_end + 2; // include \r\n
+
+    // Parse command (case-insensitive)
+    let response = if line.eq_ignore_ascii_case(b"PING") {
+        b"PONG\r\n".as_slice()
+    } else if line.eq_ignore_ascii_case(b"QUIT") {
+        return ProcessResult::Quit;
+    } else if line.len() > 5
+        && (line[..5].eq_ignore_ascii_case(b"PING ") || line[..5].eq_ignore_ascii_case(b"ping "))
+    {
+        // PING with message: echo back with PONG prefix
+        let msg = &line[5..];
+        let response_len = 5 + msg.len() + 2; // "PONG " + msg + "\r\n"
+        if response_len > output.len() {
+            return ProcessResult::Error;
+        }
+        output[..5].copy_from_slice(b"PONG ");
+        output[5..5 + msg.len()].copy_from_slice(msg);
+        output[5 + msg.len()..response_len].copy_from_slice(b"\r\n");
+        return ProcessResult::Response {
+            consumed,
+            response_len,
+        };
+    } else {
+        b"ERROR unknown command\r\n".as_slice()
+    };
+
+    let len = response.len().min(output.len());
+    output[..len].copy_from_slice(&response[..len]);
+
+    ProcessResult::Response {
+        consumed,
+        response_len: len,
+    }
+}
+
+/// Process an Echo protocol buffer.
+///
+/// Length-prefixed binary protocol:
+/// - `<length>\r\n<data>` → `<length>\r\n<data>`
+/// - `QUIT\r\n` → close connection
+#[allow(unused_variables)]
+pub fn process_echo(input: &[u8], output: &mut [u8], storage: &Arc<Storage>) -> ProcessResult {
+    // Find line ending for the length prefix
+    let line_end = match find_crlf(input) {
+        Some(pos) => pos,
+        None => return ProcessResult::NeedData,
+    };
+
+    let line = &input[..line_end];
+
+    // Check for QUIT
+    if line.eq_ignore_ascii_case(b"QUIT") {
+        return ProcessResult::Quit;
+    }
+
+    // Parse length
+    let length_str = match std::str::from_utf8(line) {
+        Ok(s) => s,
+        Err(_) => return ProcessResult::Error,
+    };
+
+    let length: usize = match length_str.parse() {
+        Ok(len) => len,
+        Err(_) => {
+            let err = b"ERROR invalid length\r\n";
+            let len = err.len().min(output.len());
+            output[..len].copy_from_slice(&err[..len]);
+            return ProcessResult::Response {
+                consumed: line_end + 2,
+                response_len: len,
+            };
+        }
+    };
+
+    // Check if we have enough data
+    let header_len = line_end + 2; // length line + \r\n
+    let total_needed = header_len + length;
+    if input.len() < total_needed {
+        return ProcessResult::NeedData;
+    }
+
+    // Echo back: length + \r\n + data
+    let response_header = format!("{length}\r\n");
+    let header_bytes = response_header.as_bytes();
+    let response_len = header_bytes.len() + length;
+
+    if response_len > output.len() {
+        return ProcessResult::Error;
+    }
+
+    output[..header_bytes.len()].copy_from_slice(header_bytes);
+    output[header_bytes.len()..response_len].copy_from_slice(&input[header_len..total_needed]);
+
+    ProcessResult::Response {
+        consumed: total_needed,
+        response_len,
+    }
+}
+
+/// Find \r\n in buffer, returning the position of \r.
+fn find_crlf(buffer: &[u8]) -> Option<usize> {
+    (0..buffer.len().saturating_sub(1)).find(|&i| buffer[i] == b'\r' && buffer[i + 1] == b'\n')
 }
 
 fn execute_command(command: &Command, storage: &Arc<Storage>) -> Vec<u8> {

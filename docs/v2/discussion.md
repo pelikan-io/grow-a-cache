@@ -351,3 +351,90 @@ Example: 0.33 ops/µs drain rate × 100µs RTT → max_batch ≈ 66
 5. **Benchmark against Tokio baseline** — Validate io_uring actually wins for this workload
 
 ---
+
+## Session: 2026-01-06 - Test Protocols and Context Management
+
+### Context
+Continuing v2 implementation after the native runtime (kqueue/io_uring) Phase 1 was completed and committed. This session added test protocols and explored tooling improvements for long-running AI-assisted development sessions.
+
+### Key Points Explored
+
+#### Test Protocol Design
+
+User requested two protocols for testing purposes:
+- **Ping**: Health checks and latency measurement
+- **Echo**: Throughput testing with variable payload sizes
+
+**Ping Protocol rationale:**
+- Load balancers need simple health checks without touching cache state
+- Measures pure network + runtime overhead (no storage operations)
+- Establishes baseline latency for comparing Tokio vs native runtime
+- Format: `PING\r\n` → `PONG\r\n` (or with optional message echo)
+
+**Echo Protocol rationale:**
+- Tests server's ability to move bytes without protocol parsing overhead
+- Variable payload sizes expose buffer handling issues, memory allocation patterns
+- Validates data integrity (echoed data should match sent data)
+- Stress testing for connection/memory limits
+- Format: Length-prefixed binary (`<length>\r\n<data>` → same format back)
+
+**Design decision:** Echo uses length-prefixed binary rather than delimiter-based to allow testing with arbitrary binary payloads and predictable framing.
+
+#### Implementation Pattern
+
+Both protocols follow the established vertical slice pattern:
+- `src/protocols/{name}/mod.rs` — Module with use case documentation
+- `src/protocols/{name}/handler.rs` — Async Tokio handler
+- `src/runtime/protocol.rs` — Synchronous `process_{name}` for native runtime
+
+Protocol dispatch added to:
+- `src/server.rs` — Tokio runtime dispatch
+- `src/runtime/kqueue/event_loop.rs` — kqueue dispatch
+- `src/runtime/mod.rs` — Config-to-runtime protocol mapping
+
+#### Context Compaction and Discussion Preservation
+
+Identified a gap in the development workflow: context compaction happened mid-session without the `milestone-documentation` skill being invoked, losing detailed discussion from prior sessions.
+
+**Problem:** The model has no visibility into context usage. Cannot proactively archive discussions before compaction occurs.
+
+**Explored solutions:**
+1. **MCP server with ContextInfo tool** — Could query context usage, but `/context` is internal to Claude Code, not accessible externally
+2. **Tie documentation to commits** — Works for code changes, misses valuable discussions that don't result in commits
+3. **Periodic checkpoints** — Requires manual discipline or external automation
+
+**Outcome:** Filed feature request on Claude Code GitHub (issue #16510) requesting:
+- System reminder injection at context thresholds (60%, 75%, 90%)
+- Or built-in `ContextInfo` tool the model can query
+- Or MCP-accessible endpoint for custom solutions
+
+### Decisions Made
+
+1. **Ping/Echo as test protocols** — Not production protocols; categorized separately in `src/protocols/mod.rs`
+2. **Length-prefixed Echo** — Binary-safe, predictable framing
+3. **Document in module docstrings** — Use cases captured in `src/protocols/{ping,echo}/mod.rs`
+4. **Feature request for context visibility** — Issue #16510 opened
+
+### Files Changed
+
+**New files:**
+- `src/protocols/ping/mod.rs` — Module with use case documentation
+- `src/protocols/ping/handler.rs` — Async handler (PING/PONG/QUIT)
+- `src/protocols/echo/mod.rs` — Module with protocol format documentation
+- `src/protocols/echo/handler.rs` — Async handler (length-prefixed echo)
+
+**Modified files:**
+- `src/config.rs` — Added `Ping`, `Echo` to `ProtocolType` enum
+- `src/protocols/mod.rs` — Added module exports, categorized test vs production
+- `src/server.rs` — Added Tokio dispatch for new protocols
+- `src/runtime/protocol.rs` — Added `Protocol::Ping/Echo`, `process_ping`, `process_echo`
+- `src/runtime/mod.rs` — Added protocol type mapping
+- `src/runtime/kqueue/event_loop.rs` — Added kqueue dispatch
+
+### Open Items
+
+1. **Test the protocols manually** — Verify Ping/Echo work with both Tokio and native runtimes
+2. **Add integration tests** — Automated tests for new protocols
+3. **Context visibility** — Awaiting response on issue #16510; meanwhile, be more diligent about invoking milestone-documentation
+
+---
