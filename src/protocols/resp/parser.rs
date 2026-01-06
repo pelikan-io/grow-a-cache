@@ -130,12 +130,7 @@ pub fn parse(buffer: &[u8]) -> ParseResult {
 
 /// Find CRLF in buffer, return position of \r
 fn find_crlf(buffer: &[u8]) -> Option<usize> {
-    for i in 0..buffer.len().saturating_sub(1) {
-        if buffer[i] == b'\r' && buffer[i + 1] == b'\n' {
-            return Some(i);
-        }
-    }
-    None
+    (0..buffer.len().saturating_sub(1)).find(|&i| buffer[i] == b'\r' && buffer[i + 1] == b'\n')
 }
 
 /// Parse a simple string: +OK\r\n
@@ -173,7 +168,7 @@ fn parse_integer(buffer: &[u8]) -> ParseResult {
         };
         match s.parse::<i64>() {
             Ok(n) => ParseResult::Complete(Frame::Integer(n), end + 2),
-            Err(_) => ParseResult::Error(format!("Invalid integer: {}", s)),
+            Err(_) => ParseResult::Error(format!("Invalid integer: {s}")),
         }
     } else {
         ParseResult::Incomplete
@@ -190,7 +185,9 @@ fn parse_bulk_string(buffer: &[u8]) -> ParseResult {
 
         let len: i64 = match len_str.parse() {
             Ok(n) => n,
-            Err(_) => return ParseResult::Error(format!("Invalid bulk string length: {}", len_str)),
+            Err(_) => {
+                return ParseResult::Error(format!("Invalid bulk string length: {len_str}"))
+            }
         };
 
         // Null bulk string
@@ -229,7 +226,7 @@ fn parse_array(buffer: &[u8]) -> ParseResult {
 
         let len: i64 = match len_str.parse() {
             Ok(n) => n,
-            Err(_) => return ParseResult::Error(format!("Invalid array length: {}", len_str)),
+            Err(_) => return ParseResult::Error(format!("Invalid array length: {len_str}")),
         };
 
         // Null array

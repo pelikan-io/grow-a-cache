@@ -186,10 +186,12 @@ impl Storage {
         // Account for old item's memory if replacing
         if let Some(old_item) = data.get(key) {
             let old_size = old_item.memory_size() + key.len();
-            self.memory_used.fetch_sub(old_size as u64, Ordering::SeqCst);
+            self.memory_used
+                .fetch_sub(old_size as u64, Ordering::SeqCst);
         }
 
-        self.memory_used.fetch_add(new_size as u64, Ordering::SeqCst);
+        self.memory_used
+            .fetch_add(new_size as u64, Ordering::SeqCst);
         data.insert(key.to_string(), item);
         self.record_access(key);
 
@@ -247,7 +249,8 @@ impl Storage {
                 // Treat expired items as not found
                 let old_size = item.memory_size() + key.len();
                 data.remove(key);
-                self.memory_used.fetch_sub(old_size as u64, Ordering::SeqCst);
+                self.memory_used
+                    .fetch_sub(old_size as u64, Ordering::SeqCst);
                 StorageResult::NotFound
             }
             Some(item) if item.cas_unique != cas_unique => StorageResult::CasMismatch,
@@ -264,14 +267,16 @@ impl Storage {
                 let new_size = new_item.memory_size() + key.len();
 
                 // Update memory tracking
-                self.memory_used.fetch_sub(old_size as u64, Ordering::SeqCst);
+                self.memory_used
+                    .fetch_sub(old_size as u64, Ordering::SeqCst);
 
                 // Ensure we have memory (release lock temporarily)
                 drop(data);
                 self.ensure_memory_available(new_size);
                 data = self.data.write().unwrap();
 
-                self.memory_used.fetch_add(new_size as u64, Ordering::SeqCst);
+                self.memory_used
+                    .fetch_add(new_size as u64, Ordering::SeqCst);
                 data.insert(key.to_string(), new_item);
                 self.record_access(key);
 
@@ -305,7 +310,8 @@ impl Storage {
             Some(item) if item.is_expired() => {
                 let old_size = item.memory_size() + key.len();
                 data.remove(key);
-                self.memory_used.fetch_sub(old_size as u64, Ordering::SeqCst);
+                self.memory_used
+                    .fetch_sub(old_size as u64, Ordering::SeqCst);
                 StorageResult::NotStored
             }
             Some(item) => {
@@ -324,7 +330,8 @@ impl Storage {
                             item.value.extend_from_slice(data_to_append);
                             item.cas_unique = self.next_cas_unique();
                             item.last_accessed = Instant::now();
-                            self.memory_used.fetch_add(additional_size as u64, Ordering::SeqCst);
+                            self.memory_used
+                                .fetch_add(additional_size as u64, Ordering::SeqCst);
                             self.record_access(key);
                             StorageResult::Stored
                         }
@@ -334,7 +341,8 @@ impl Storage {
                     item.value.extend_from_slice(data_to_append);
                     item.cas_unique = self.next_cas_unique();
                     item.last_accessed = Instant::now();
-                    self.memory_used.fetch_add(additional_size as u64, Ordering::SeqCst);
+                    self.memory_used
+                        .fetch_add(additional_size as u64, Ordering::SeqCst);
                     self.record_access(key);
                     StorageResult::Stored
                 }
@@ -351,7 +359,8 @@ impl Storage {
             Some(item) if item.is_expired() => {
                 let old_size = item.memory_size() + key.len();
                 data.remove(key);
-                self.memory_used.fetch_sub(old_size as u64, Ordering::SeqCst);
+                self.memory_used
+                    .fetch_sub(old_size as u64, Ordering::SeqCst);
                 StorageResult::NotStored
             }
             Some(item) => {
@@ -372,7 +381,8 @@ impl Storage {
                             item.value = new_value;
                             item.cas_unique = self.next_cas_unique();
                             item.last_accessed = Instant::now();
-                            self.memory_used.fetch_add(additional_size as u64, Ordering::SeqCst);
+                            self.memory_used
+                                .fetch_add(additional_size as u64, Ordering::SeqCst);
                             self.record_access(key);
                             StorageResult::Stored
                         }
@@ -384,7 +394,8 @@ impl Storage {
                     item.value = new_value;
                     item.cas_unique = self.next_cas_unique();
                     item.last_accessed = Instant::now();
-                    self.memory_used.fetch_add(additional_size as u64, Ordering::SeqCst);
+                    self.memory_used
+                        .fetch_add(additional_size as u64, Ordering::SeqCst);
                     self.record_access(key);
                     StorageResult::Stored
                 }
@@ -647,7 +658,7 @@ mod tests {
 
         // Add items until we hit the limit
         for i in 0..20 {
-            let key = format!("key{}", i);
+            let key = format!("key{i}");
             let value = vec![0u8; 50];
             storage.set(&key, value, 0, 0);
         }

@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git checkout:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(mv:*)",
+      "Bash(mkdir:*)",
+      "Bash(cp:*)",
+      "Bash(git rm:*)",
+      "Bash(gh release view:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo build:*)",
+      "Bash(chmod:*)",
+      "Bash(cargo clean:*)"
+    ]
+  }
+}
