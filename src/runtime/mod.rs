@@ -32,7 +32,7 @@ mod uring;
 
 // mio-based implementation for both Linux and macOS
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-mod mio_impl;
+mod mio;
 
 use crate::config::{Config, ProtocolType};
 use crate::storage::Storage;
@@ -60,7 +60,7 @@ pub fn run(config: Config) -> std::io::Result<()> {
     #[cfg(target_os = "macos")]
     {
         // macOS uses mio/kqueue for native runtime
-        mio_impl::run(config, storage, protocol)
+        mio::run(config, storage, protocol)
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -79,7 +79,7 @@ pub fn run(config: Config) -> std::io::Result<()> {
 pub fn run_mio(config: Config) -> std::io::Result<()> {
     let storage = Storage::new(config.max_memory, config.default_ttl);
     let protocol = map_protocol(config.protocol);
-    mio_impl::run(config, storage, protocol)
+    mio::run(config, storage, protocol)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
