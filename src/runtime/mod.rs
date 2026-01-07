@@ -6,33 +6,31 @@
 //!
 //! Both share common abstractions:
 //! - `BufferPool`: Per-worker buffer management
-//! - `Connection`: Connection state machine
-//! - `Token`: Operation tracking for completion correlation
+//! - `Connection`: Connection state machine (io_uring only)
+//! - `Token`: Operation tracking for completion correlation (io_uring only)
 
 mod buffer;
-mod connection;
 pub mod protocol;
-mod token;
 
 // Re-export for use by platform-specific implementations
 pub(crate) use buffer::BufferPool;
-#[allow(unused_imports)]
-pub(crate) use connection::ConnState;
 pub(crate) use protocol::{ProcessResult, Protocol};
 
-// Used by io_uring implementation
-#[allow(unused_imports)]
-pub(crate) use connection::{Connection, ConnectionRegistry};
-#[allow(unused_imports)]
+// io_uring-specific modules (completion-based model needs explicit state tracking)
+#[cfg(target_os = "linux")]
+mod connection;
+#[cfg(target_os = "linux")]
+mod token;
+
+#[cfg(target_os = "linux")]
+pub(crate) use connection::{ConnState, Connection, ConnectionRegistry};
+#[cfg(target_os = "linux")]
 pub(crate) use token::{OpType, TokenAllocator};
 
 #[cfg(target_os = "linux")]
 mod uring;
 
-#[cfg(target_os = "macos")]
-mod kqueue;
-
-// mio-based implementation available on both Linux and macOS
+// mio-based implementation for both Linux and macOS
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod mio_impl;
 
@@ -49,7 +47,7 @@ fn map_protocol(config_protocol: ProtocolType) -> Protocol {
     }
 }
 
-/// Run the server with native io_uring (Linux) or kqueue (macOS) backend.
+/// Run the server with native io_uring (Linux) or mio/kqueue (macOS) backend.
 pub fn run(config: Config) -> std::io::Result<()> {
     let storage = Storage::new(config.max_memory, config.default_ttl);
     let protocol = map_protocol(config.protocol);
@@ -61,7 +59,8 @@ pub fn run(config: Config) -> std::io::Result<()> {
 
     #[cfg(target_os = "macos")]
     {
-        kqueue::run(config, storage, protocol)
+        // macOS uses mio/kqueue for native runtime
+        mio_impl::run(config, storage, protocol)
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
