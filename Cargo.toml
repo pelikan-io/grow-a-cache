@@ -34,6 +34,7 @@ socket2 = { version = "0.5", features = ["all"] }
 # Linux io_uring support
 [target.'cfg(target_os = "linux")'.dependencies]
 io-uring = "0.7"
+mio = { version = "1.0", features = ["os-poll", "net"] }
 
 # macOS mio/kqueue support
 [target.'cfg(target_os = "macos")'.dependencies]

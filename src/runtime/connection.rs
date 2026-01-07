@@ -5,33 +5,19 @@
 
 #![allow(dead_code)] // Some types will be used when io_uring is wired in
 
+use crate::runtime::protocol::Protocol;
 use slab::Slab;
 use std::os::unix::io::RawFd;
-
-/// Protocol type for a connection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Protocol {
-    /// Memcached text protocol.
-    Memcached,
-    /// Redis RESP protocol.
-    Resp,
-}
 
 /// Current state of a connection.
 #[derive(Debug, Clone, Copy)]
 pub enum ConnState {
     /// Waiting for data to be read.
-    Reading {
-        /// Buffer index holding partial data.
-        buf_idx: usize,
-        /// Bytes already read into buffer.
-        filled: usize,
-    },
-    /// Processing a complete command.
-    Processing,
+    /// Buffer is selected by kernel from provided buffer ring.
+    Reading,
     /// Writing response data.
     Writing {
-        /// Buffer index holding response.
+        /// Buffer index holding response in write buffer pool.
         buf_idx: usize,
         /// Bytes already written.
         written: usize,
@@ -55,17 +41,12 @@ pub struct Connection {
 
 impl Connection {
     /// Create a new connection in initial reading state.
-    pub fn new(fd: RawFd, buf_idx: usize, protocol: Protocol) -> Self {
+    pub fn new(fd: RawFd, protocol: Protocol) -> Self {
         Self {
             fd,
-            state: ConnState::Reading { buf_idx, filled: 0 },
+            state: ConnState::Reading,
             protocol,
         }
-    }
-
-    /// Transition to processing state.
-    pub fn start_processing(&mut self) {
-        self.state = ConnState::Processing;
     }
 
     /// Transition to writing state.
@@ -78,8 +59,8 @@ impl Connection {
     }
 
     /// Transition back to reading state.
-    pub fn start_reading(&mut self, buf_idx: usize) {
-        self.state = ConnState::Reading { buf_idx, filled: 0 };
+    pub fn start_reading(&mut self) {
+        self.state = ConnState::Reading;
     }
 
     /// Mark connection for closing.
@@ -171,18 +152,9 @@ mod tests {
 
     #[test]
     fn test_connection_state_transitions() {
-        let mut conn = Connection::new(42, 0, Protocol::Memcached);
+        let mut conn = Connection::new(42, Protocol::Memcached);
 
-        assert!(matches!(
-            conn.state,
-            ConnState::Reading {
-                buf_idx: 0,
-                filled: 0
-            }
-        ));
-
-        conn.start_processing();
-        assert!(matches!(conn.state, ConnState::Processing));
+        assert!(matches!(conn.state, ConnState::Reading));
 
         conn.start_writing(1, 100);
         assert!(matches!(
@@ -194,14 +166,8 @@ mod tests {
             }
         ));
 
-        conn.start_reading(2);
-        assert!(matches!(
-            conn.state,
-            ConnState::Reading {
-                buf_idx: 2,
-                filled: 0
-            }
-        ));
+        conn.start_reading();
+        assert!(matches!(conn.state, ConnState::Reading));
 
         conn.close();
         assert!(matches!(conn.state, ConnState::Closing));
@@ -211,9 +177,9 @@ mod tests {
     fn test_connection_registry() {
         let mut registry = ConnectionRegistry::new(2);
 
-        let c1 = Connection::new(10, 0, Protocol::Memcached);
-        let c2 = Connection::new(11, 1, Protocol::Resp);
-        let c3 = Connection::new(12, 2, Protocol::Memcached);
+        let c1 = Connection::new(10, Protocol::Memcached);
+        let c2 = Connection::new(11, Protocol::Resp);
+        let c3 = Connection::new(12, Protocol::Memcached);
 
         let id1 = registry.insert(c1).unwrap();
         let id2 = registry.insert(c2).unwrap();

@@ -13,11 +13,10 @@ pub enum OpType {
     /// Accept operation on listener socket.
     Accept,
     /// Read operation on a connection.
+    /// Buffer is selected by kernel from provided buffer ring.
     Read {
         /// Connection identifier in the registry.
         conn_id: usize,
-        /// Buffer index in the buffer pool.
-        buf_idx: usize,
     },
     /// Write operation on a connection.
     Write {
@@ -90,22 +89,13 @@ mod tests {
         let mut alloc = TokenAllocator::new(16);
 
         let t1 = alloc.alloc(OpType::Accept);
-        let t2 = alloc.alloc(OpType::Read {
-            conn_id: 1,
-            buf_idx: 0,
-        });
+        let t2 = alloc.alloc(OpType::Read { conn_id: 1 });
 
         assert_eq!(alloc.len(), 2);
 
         // Verify we can retrieve operations
         assert!(matches!(alloc.get(t1), Some(OpType::Accept)));
-        assert!(matches!(
-            alloc.get(t2),
-            Some(OpType::Read {
-                conn_id: 1,
-                buf_idx: 0
-            })
-        ));
+        assert!(matches!(alloc.get(t2), Some(OpType::Read { conn_id: 1 })));
 
         // Free and verify
         alloc.free(t1);

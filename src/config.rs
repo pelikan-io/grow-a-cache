@@ -31,6 +31,8 @@ pub enum RuntimeType {
     Tokio,
     /// Custom io_uring/kqueue runtime (experimental)
     Native,
+    /// mio/epoll runtime (for comparison with io_uring on Linux)
+    Mio,
 }
 
 /// Command-line arguments for the cache server

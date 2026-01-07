@@ -47,6 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match config.runtime {
         RuntimeType::Tokio => run_tokio(config),
         RuntimeType::Native => run_native(config),
+        RuntimeType::Mio => run_mio(config),
     }
 }
 
@@ -63,5 +64,12 @@ fn run_tokio(config: Config) -> Result<(), Box<dyn std::error::Error>> {
 fn run_native(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     info!("Using native runtime (experimental)");
     runtime::run(config)?;
+    Ok(())
+}
+
+/// Run with mio runtime (epoll on Linux, kqueue on macOS)
+fn run_mio(config: Config) -> Result<(), Box<dyn std::error::Error>> {
+    info!("Using mio runtime (epoll/kqueue)");
+    runtime::run_mio(config)?;
     Ok(())
 }

@@ -2,12 +2,18 @@
 //!
 //! Completion-based model: submit operations to the ring,
 //! then process completions in batches.
+//!
+//! Uses provided buffer rings for kernel-managed buffer selection on reads.
 
+use super::buf_ring::{BufRing, READ_BGID};
 use crate::config::Config;
-use crate::runtime::{
-    BufferPool, ConnState, Connection, ConnectionRegistry, OpType, Protocol, TokenAllocator,
+use crate::runtime::protocol::{
+    process_echo, process_memcached, process_ping, process_resp, ProcessResult,
 };
+use crate::runtime::{BufferPool, ConnState, Connection, ConnectionRegistry, OpType, Protocol, TokenAllocator};
 use crate::storage::Storage;
+use io_uring::cqueue::buffer_select;
+use io_uring::squeue::Flags;
 use io_uring::{opcode, types, IoUring};
 use std::io;
 use std::net::SocketAddr;
@@ -42,13 +48,12 @@ pub fn run(config: Config, storage: Arc<Storage>, protocol: Protocol) -> io::Res
         let config = config.clone();
         let addr = addr;
         let storage = Arc::clone(&storage);
+        let protocol = protocol;
 
         let handle = thread::Builder::new()
             .name(format!("worker-{}", worker_id))
             .spawn(move || {
-                // TODO: Wire protocol handlers into io_uring event loop
-                let _ = (&storage, protocol); // Suppress unused warnings for now
-                if let Err(e) = worker_loop(worker_id, addr, &config) {
+                if let Err(e) = worker_loop(worker_id, addr, &config, storage, protocol) {
                     error!(worker = worker_id, error = %e, "Worker failed");
                 }
             })?;
@@ -64,7 +69,13 @@ pub fn run(config: Config, storage: Arc<Storage>, protocol: Protocol) -> io::Res
     Ok(())
 }
 
-fn worker_loop(worker_id: usize, addr: SocketAddr, config: &Config) -> io::Result<()> {
+fn worker_loop(
+    worker_id: usize,
+    addr: SocketAddr,
+    config: &Config,
+    storage: Arc<Storage>,
+    protocol: Protocol,
+) -> io::Result<()> {
     // Create io_uring instance
     let mut ring: IoUring = IoUring::new(config.ring_size as u32)?;
 
@@ -76,17 +87,26 @@ fn worker_loop(worker_id: usize, addr: SocketAddr, config: &Config) -> io::Resul
     let buffer_size = config.buffer_size;
     let batch_size = config.batch_size;
 
-    let mut buffers = BufferPool::new(max_connections, buffer_size);
-    let mut connections = ConnectionRegistry::new(max_connections);
-    let mut tokens = TokenAllocator::new(max_connections * 2); // headroom for concurrent ops
+    // Calculate ring entries as next power of 2
+    let ring_entries = (max_connections as u16).next_power_of_two();
 
-    // TODO: Register buffers with io_uring for faster validation
-    // register_buffers(&ring, &buffers)?;
+    // Create provided buffer ring for reads (kernel selects buffers)
+    let read_buf_ring = BufRing::new(&ring, ring_entries, buffer_size, READ_BGID)?;
+
+    // Create buffer pool for writes (we control allocation)
+    let mut write_buffers = BufferPool::new(max_connections, buffer_size);
+
+    let mut connections = ConnectionRegistry::new(max_connections);
+    let mut tokens = TokenAllocator::new(max_connections * 2);
 
     // Submit initial accept
     submit_accept(&mut ring, &mut tokens, listener_fd)?;
 
-    info!(worker = worker_id, "Worker started");
+    info!(
+        worker = worker_id,
+        ring_entries = ring_entries,
+        "Worker started with buffer ring"
+    );
 
     loop {
         // Submit pending operations and wait for at least one completion
@@ -104,6 +124,7 @@ fn worker_loop(worker_id: usize, addr: SocketAddr, config: &Config) -> io::Resul
 
             let token = cqe.user_data();
             let result = cqe.result();
+            let flags = cqe.flags();
 
             // Get and free the operation token
             let op = match tokens.free(token) {
@@ -121,20 +142,26 @@ fn worker_loop(worker_id: usize, addr: SocketAddr, config: &Config) -> io::Resul
                         &mut ring,
                         &mut tokens,
                         &mut connections,
-                        &mut buffers,
                         listener_fd,
                         worker_id,
+                        protocol,
                     )?;
                 }
-                OpType::Read { conn_id, buf_idx } => {
+                OpType::Read { conn_id } => {
+                    // Extract buffer ID from CQE flags (kernel selected this buffer)
+                    let buf_id = buffer_select(flags);
+
                     handle_read(
                         result,
                         conn_id,
-                        buf_idx,
+                        buf_id,
+                        flags,
                         &mut ring,
                         &mut tokens,
                         &mut connections,
-                        &mut buffers,
+                        &read_buf_ring,
+                        &mut write_buffers,
+                        &storage,
                     )?;
                 }
                 OpType::Write { conn_id, buf_idx } => {
@@ -145,7 +172,7 @@ fn worker_loop(worker_id: usize, addr: SocketAddr, config: &Config) -> io::Resul
                         &mut ring,
                         &mut tokens,
                         &mut connections,
-                        &mut buffers,
+                        &mut write_buffers,
                     )?;
                 }
             }
@@ -158,9 +185,9 @@ fn handle_accept(
     ring: &mut IoUring,
     tokens: &mut TokenAllocator,
     connections: &mut ConnectionRegistry,
-    buffers: &mut BufferPool,
     listener_fd: RawFd,
     worker_id: usize,
+    protocol: Protocol,
 ) -> io::Result<()> {
     // Always re-arm accept
     submit_accept(ring, tokens, listener_fd)?;
@@ -173,25 +200,12 @@ fn handle_accept(
 
     let client_fd = result;
 
-    // Allocate buffer for this connection
-    let buf_idx = match buffers.alloc() {
-        Some(idx) => idx,
-        None => {
-            warn!("Buffer pool exhausted, closing connection");
-            unsafe { libc::close(client_fd) };
-            return Ok(());
-        }
-    };
-
-    // TODO: Pass protocol from config through to here
-    let protocol = crate::runtime::connection::Protocol::Memcached;
-    let conn = Connection::new(client_fd, buf_idx, protocol);
+    let conn = Connection::new(client_fd, protocol);
 
     let conn_id = match connections.insert(conn) {
         Some(id) => id,
         None => {
             warn!("Connection limit reached, closing");
-            buffers.free(buf_idx);
             unsafe { libc::close(client_fd) };
             return Ok(());
         }
@@ -204,8 +218,8 @@ fn handle_accept(
         "Accepted connection"
     );
 
-    // Submit read for the new connection
-    submit_read(ring, tokens, connections, buffers, conn_id)?;
+    // Submit read for the new connection (kernel will select buffer)
+    submit_read(ring, tokens, connections, conn_id)?;
 
     Ok(())
 }
@@ -213,11 +227,14 @@ fn handle_accept(
 fn handle_read(
     result: i32,
     conn_id: usize,
-    buf_idx: usize,
+    buf_id: Option<u16>,
+    _flags: u32,
     ring: &mut IoUring,
     tokens: &mut TokenAllocator,
     connections: &mut ConnectionRegistry,
-    buffers: &mut BufferPool,
+    read_buf_ring: &BufRing,
+    write_buffers: &mut BufferPool,
+    storage: &Arc<Storage>,
 ) -> io::Result<()> {
     if result <= 0 {
         // EOF or error: close connection
@@ -227,31 +244,94 @@ fn handle_read(
         } else {
             debug!(conn_id, "Connection closed by peer");
         }
-        close_connection(connections, buffers, conn_id);
+        // Recycle buffer if we got one
+        if let Some(bid) = buf_id {
+            read_buf_ring.recycle_buffer(bid);
+        }
+        close_connection(connections, write_buffers, conn_id);
         return Ok(());
     }
+
+    // Kernel must have provided a buffer for successful read
+    let bid = match buf_id {
+        Some(bid) => bid,
+        None => {
+            warn!(conn_id, "Read completed without buffer ID");
+            close_connection(connections, write_buffers, conn_id);
+            return Ok(());
+        }
+    };
 
     let n = result as usize;
     let conn = match connections.get_mut(conn_id) {
         Some(c) => c,
-        None => return Ok(()),
+        None => {
+            read_buf_ring.recycle_buffer(bid);
+            return Ok(());
+        }
     };
 
-    // Update filled amount
-    if let ConnState::Reading { filled, .. } = &mut conn.state {
-        *filled += n;
+    let protocol = conn.protocol;
+
+    // Get the read data from the kernel-selected buffer
+    let input = &read_buf_ring.get_buffer_slice(bid)[..n];
+
+    // Allocate a write buffer for the response
+    let write_buf_idx = match write_buffers.alloc() {
+        Some(idx) => idx,
+        None => {
+            warn!(conn_id, "No write buffer available");
+            read_buf_ring.recycle_buffer(bid);
+            close_connection(connections, write_buffers, conn_id);
+            return Ok(());
+        }
+    };
+
+    let write_buf = write_buffers.get_mut(write_buf_idx);
+    let result = match protocol {
+        Protocol::Memcached => process_memcached(input, write_buf, storage),
+        Protocol::Resp => process_resp(input, write_buf, storage),
+        Protocol::Ping => process_ping(input, write_buf, storage),
+        Protocol::Echo => process_echo(input, write_buf, storage),
+    };
+
+    // Recycle read buffer now that we've processed the data
+    read_buf_ring.recycle_buffer(bid);
+
+    // Re-borrow connection after buffer operations
+    let conn = match connections.get_mut(conn_id) {
+        Some(c) => c,
+        None => {
+            write_buffers.free(write_buf_idx);
+            return Ok(());
+        }
+    };
+
+    match result {
+        ProcessResult::NeedData => {
+            // Need more data - resubmit read
+            // Note: This is a simplified handling; a full implementation would
+            // need to accumulate partial data across multiple reads
+            write_buffers.free(write_buf_idx);
+            submit_read(ring, tokens, connections, conn_id)?;
+        }
+        ProcessResult::Response {
+            consumed: _,
+            response_len,
+        } => {
+            // Transition to writing
+            conn.start_writing(write_buf_idx, response_len);
+            submit_write(ring, tokens, connections, write_buffers, conn_id, response_len)?;
+        }
+        ProcessResult::Quit => {
+            write_buffers.free(write_buf_idx);
+            close_connection(connections, write_buffers, conn_id);
+        }
+        ProcessResult::Error => {
+            write_buffers.free(write_buf_idx);
+            close_connection(connections, write_buffers, conn_id);
+        }
     }
-
-    // TODO: Parse command, execute, prepare response
-    // For now, echo back what we received
-    let buf = buffers.get(buf_idx);
-    let response_len = n; // Echo: response = input
-
-    // Copy to write position (in real impl, prepare actual response)
-    // For echo, data is already in buffer
-
-    conn.start_writing(buf_idx, response_len);
-    submit_write(ring, tokens, connections, buffers, conn_id, response_len)?;
 
     Ok(())
 }
@@ -263,34 +343,39 @@ fn handle_write(
     ring: &mut IoUring,
     tokens: &mut TokenAllocator,
     connections: &mut ConnectionRegistry,
-    buffers: &mut BufferPool,
+    write_buffers: &mut BufferPool,
 ) -> io::Result<()> {
     if result <= 0 {
         if result < 0 {
             let err = io::Error::from_raw_os_error(-result);
             debug!(conn_id, "Write error: {}", err);
         }
-        close_connection(connections, buffers, conn_id);
+        write_buffers.free(buf_idx);
+        close_connection(connections, write_buffers, conn_id);
         return Ok(());
     }
 
     let n = result as usize;
     let conn = match connections.get_mut(conn_id) {
         Some(c) => c,
-        None => return Ok(()),
+        None => {
+            write_buffers.free(buf_idx);
+            return Ok(());
+        }
     };
 
     if let ConnState::Writing { written, total, .. } = &mut conn.state {
         *written += n;
 
         if *written >= *total {
-            // Write complete, start reading next command
-            conn.start_reading(buf_idx);
-            submit_read(ring, tokens, connections, buffers, conn_id)?;
+            // Write complete, free write buffer and go back to reading
+            write_buffers.free(buf_idx);
+            conn.start_reading();
+            submit_read(ring, tokens, connections, conn_id)?;
         } else {
             // Partial write, continue
             let remaining = *total - *written;
-            submit_write(ring, tokens, connections, buffers, conn_id, remaining)?;
+            submit_write(ring, tokens, connections, write_buffers, conn_id, remaining)?;
         }
     }
 
@@ -326,38 +411,23 @@ fn submit_read(
     ring: &mut IoUring,
     tokens: &mut TokenAllocator,
     connections: &ConnectionRegistry,
-    buffers: &mut BufferPool,
     conn_id: usize,
 ) -> io::Result<()> {
     let conn = connections
         .get(conn_id)
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "connection not found"))?;
 
-    let (buf_idx, offset) = match conn.state {
-        ConnState::Reading { buf_idx, filled } => (buf_idx, filled),
-        _ => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "not in reading state",
-            ))
-        }
-    };
+    let token = tokens.alloc(OpType::Read { conn_id });
 
-    let buf_ptr = buffers.get_ptr(buf_idx);
-    let buf_len = buffers.buffer_size() - offset;
-
-    let token = tokens.alloc(OpType::Read { conn_id, buf_idx });
-
-    let read = opcode::Read::new(
-        types::Fd(conn.fd),
-        unsafe { buf_ptr.add(offset) },
-        buf_len as u32,
-    )
-    .build()
-    .user_data(token);
+    // Use Recv with BUFFER_SELECT - kernel will pick a buffer from our ring
+    let recv = opcode::Recv::new(types::Fd(conn.fd), std::ptr::null_mut(), 0)
+        .buf_group(READ_BGID)
+        .build()
+        .flags(Flags::BUFFER_SELECT)
+        .user_data(token);
 
     unsafe {
-        ring.submission().push(&read).map_err(|_| {
+        ring.submission().push(&recv).map_err(|_| {
             tokens.free(token);
             io::Error::new(io::ErrorKind::Other, "submission queue full")
         })?;
@@ -414,16 +484,13 @@ fn submit_write(
 
 fn close_connection(
     connections: &mut ConnectionRegistry,
-    buffers: &mut BufferPool,
+    write_buffers: &mut BufferPool,
     conn_id: usize,
 ) {
     if let Some(conn) = connections.remove(conn_id) {
-        // Return buffer to pool
-        match conn.state {
-            ConnState::Reading { buf_idx, .. } | ConnState::Writing { buf_idx, .. } => {
-                buffers.free(buf_idx);
-            }
-            _ => {}
+        // Return write buffer to pool if we have one
+        if let ConnState::Writing { buf_idx, .. } = conn.state {
+            write_buffers.free(buf_idx);
         }
 
         // Close the file descriptor
