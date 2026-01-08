@@ -438,3 +438,123 @@ Identified a gap in the development workflow: context compaction happened mid-se
 3. **Context visibility** — Awaiting response on issue #16510; meanwhile, be more diligent about invoking milestone-documentation
 
 ---
+
+## Session: 2026-01-07 - Runtime Module Refactoring
+
+### Context
+Exploring shared abstractions for the runtime module to reduce code duplication between io_uring and mio backends. The main entities are: workers/threads, connections, and buffers—currently siloed between backends.
+
+### Key Points Explored
+
+#### Scope: Which Runtimes?
+**Question:** Should Tokio be included in the shared abstraction?
+
+**Decision:** Leave Tokio out. Tokio's async/await model is fundamentally different from the synchronous event loops in io_uring and mio. Forcing them into the same abstraction would create awkward impedance mismatches.
+
+#### Trait Overhead
+**Question:** Is trait overhead acceptable for runtime abstractions?
+
+**Analysis:** The overhead is vtable indirection—one extra memory lookup per virtual method call (~1-5ns). For operations that already involve syscalls (100s of ns) and network I/O (µs-ms), this is negligible.
+
+**Decision:** Traits are acceptable. Cleaner code architecture wins over micro-optimization at this level.
+
+#### Control Plane vs Data Plane Separation
+
+User introduced the networking concept of separating control plane from data plane:
+
+- **Control plane**: Connection lifecycle management (accept, TLS handshake, close)
+- **Data plane**: Request processing on established connections (read, process, write)
+
+This maps naturally to a two-level state machine:
+
+```rust
+/// Control plane: connection lifecycle phases
+enum ConnPhase {
+    Accepting,
+    Handshaking,  // future TLS support
+    Established(DataState),
+    Closing,
+}
+
+/// Data plane: request processing state
+enum DataState {
+    Reading { filled: usize },
+    Writing { buf_idx: usize, written: usize, total: usize },
+}
+```
+
+**Benefits:**
+1. Type system enforces data operations only on established connections
+2. Clear handoff point for future worker specialization (accept workers vs request workers)
+3. Natural fit for TLS handshake phase
+
+#### Worker Model
+Each worker is a thread with:
+- Own listener socket (SO_REUSEPORT for kernel load balancing)
+- Own event loop
+- Own resources (buffers, connection registry)
+
+Kernel distributes incoming connections across workers. Workers don't share connections.
+
+#### Module Naming Confusion
+`protocol.rs` was confusing because `protocols/` directory contains the actual protocol implementations (parsers, handlers).
+
+**Options considered:**
+1. `protocol_dispatch.rs` — verbose
+2. `dispatch.rs` — unclear what's being dispatched
+3. `request.rs` — matches the actual content (request processing)
+
+**Decision:** Rename to `request.rs`. The file contains synchronous request processing adapters for the native runtime.
+
+### Implementation
+
+Files changed:
+- `src/runtime/protocol.rs` → `src/runtime/request.rs`
+- `src/runtime/connection.rs` — Refactored with `ConnPhase`/`DataState`, made shared (removed `#[cfg(target_os = "linux")]`)
+- `src/runtime/token.rs` → `src/runtime/uring/token.rs` (io_uring-specific)
+- `src/runtime/mod.rs` — Updated exports
+- `src/runtime/uring/event_loop.rs` — Updated for new state types
+- `src/runtime/mio/event_loop.rs` — Uses shared `DataState`
+
+New module structure:
+```
+runtime/
+├── mod.rs           # Shared entry point
+├── buffer.rs        # Shared BufferPool
+├── connection.rs    # Shared Connection, ConnPhase, DataState, ConnectionRegistry
+├── request.rs       # Shared request dispatch
+├── mio/             # mio backend (epoll/kqueue)
+│   ├── mod.rs
+│   └── event_loop.rs
+└── uring/           # io_uring backend (Linux)
+    ├── mod.rs
+    ├── buf_ring.rs
+    ├── event_loop.rs
+    └── token.rs
+```
+
+### Functional Tests
+
+Created `tests/functional.sh` to test all protocol × runtime combinations:
+- 4 protocols: Ping, Echo, Memcached, RESP
+- 2 runtimes: native (io_uring), mio (epoll)
+- 18 test cases total
+
+All tests pass.
+
+### Decisions Made
+
+1. **Exclude Tokio** from shared abstraction (different async model)
+2. **Use traits** for runtime abstraction (overhead negligible)
+3. **Separate control/data plane** with `ConnPhase`/`DataState` enums
+4. **Rename `protocol.rs`** → `request.rs`
+5. **Move `token.rs`** into `uring/` (io_uring-specific)
+6. **Share `connection.rs`** between io_uring and mio
+
+### Open Items
+
+1. **Worker trait** — Not yet implemented; each backend still has its own event loop entry point
+2. **Shared buffer abstraction** — `BufferPool` exists but backends use it differently
+3. **TLS support** — `Handshaking` phase ready but not implemented
+
+---

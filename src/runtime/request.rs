@@ -1,7 +1,7 @@
-//! Protocol processing for the custom runtime.
+//! Request dispatch for the custom runtime.
 //!
-//! Provides synchronous protocol parsing and response generation
-//! that works with raw byte buffers (no async runtime required).
+//! Provides synchronous request processing that dispatches to protocol handlers
+//! and works with raw byte buffers (no async runtime required).
 
 use crate::protocols::memcached::parser::{Command, ParseResult, Parser, Response};
 use crate::protocols::resp::parser as resp_parser;

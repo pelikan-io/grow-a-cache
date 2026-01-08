@@ -4,31 +4,28 @@
 //! - Linux: io_uring for completion-based I/O, or mio/epoll for comparison
 //! - macOS: mio/kqueue for readiness-based I/O
 //!
-//! Both share common abstractions:
+//! Shared abstractions:
 //! - `BufferPool`: Per-worker buffer management
-//! - `Connection`: Connection state machine (io_uring only)
-//! - `Token`: Operation tracking for completion correlation (io_uring only)
+//! - `Connection`: Connection state machine with control/data plane separation
+//! - `ConnPhase`: Control plane state (Accepting, Handshaking, Established, Closing)
+//! - `DataState`: Data plane state (Reading, Writing)
 
 mod buffer;
-pub mod protocol;
-
-// Re-export for use by platform-specific implementations
-pub(crate) use buffer::BufferPool;
-pub(crate) use protocol::{ProcessResult, Protocol};
-
-// io_uring-specific modules (completion-based model needs explicit state tracking)
-#[cfg(target_os = "linux")]
 mod connection;
-#[cfg(target_os = "linux")]
-mod token;
+pub mod request;
 
-#[cfg(target_os = "linux")]
-pub(crate) use connection::{ConnState, Connection, ConnectionRegistry};
-#[cfg(target_os = "linux")]
-pub(crate) use token::{OpType, TokenAllocator};
+// Re-export shared types for use by platform-specific implementations
+pub(crate) use buffer::BufferPool;
+pub(crate) use connection::{ConnPhase, Connection, ConnectionRegistry, DataState};
+pub(crate) use request::{ProcessResult, Protocol};
 
+// io_uring backend (Linux only)
 #[cfg(target_os = "linux")]
 mod uring;
+
+// Re-export io_uring-specific types
+#[cfg(target_os = "linux")]
+pub(crate) use uring::{OpType, TokenAllocator};
 
 // mio-based implementation for both Linux and macOS
 #[cfg(any(target_os = "linux", target_os = "macos"))]

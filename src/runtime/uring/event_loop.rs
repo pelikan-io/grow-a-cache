@@ -7,10 +7,13 @@
 
 use super::buf_ring::{BufRing, READ_BGID};
 use crate::config::Config;
-use crate::runtime::protocol::{
+use crate::runtime::request::{
     process_echo, process_memcached, process_ping, process_resp, ProcessResult,
 };
-use crate::runtime::{BufferPool, ConnState, Connection, ConnectionRegistry, OpType, Protocol, TokenAllocator};
+use crate::runtime::{
+    BufferPool, ConnPhase, Connection, ConnectionRegistry, DataState, OpType, Protocol,
+    TokenAllocator,
+};
 use crate::storage::Storage;
 use io_uring::cqueue::buffer_select;
 use io_uring::squeue::Flags;
@@ -46,9 +49,7 @@ pub fn run(config: Config, storage: Arc<Storage>, protocol: Protocol) -> io::Res
 
     for worker_id in 0..num_workers {
         let config = config.clone();
-        let addr = addr;
         let storage = Arc::clone(&storage);
-        let protocol = protocol;
 
         let handle = thread::Builder::new()
             .name(format!("worker-{}", worker_id))
@@ -321,7 +322,14 @@ fn handle_read(
         } => {
             // Transition to writing
             conn.start_writing(write_buf_idx, response_len);
-            submit_write(ring, tokens, connections, write_buffers, conn_id, response_len)?;
+            submit_write(
+                ring,
+                tokens,
+                connections,
+                write_buffers,
+                conn_id,
+                response_len,
+            )?;
         }
         ProcessResult::Quit => {
             write_buffers.free(write_buf_idx);
@@ -364,7 +372,7 @@ fn handle_write(
         }
     };
 
-    if let ConnState::Writing { written, total, .. } = &mut conn.state {
+    if let ConnPhase::Established(DataState::Writing { written, total, .. }) = &mut conn.phase {
         *written += n;
 
         if *written >= *total {
@@ -448,10 +456,10 @@ fn submit_write(
         .get(conn_id)
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "connection not found"))?;
 
-    let (buf_idx, offset) = match conn.state {
-        ConnState::Writing {
+    let (buf_idx, offset) = match conn.phase {
+        ConnPhase::Established(DataState::Writing {
             buf_idx, written, ..
-        } => (buf_idx, written),
+        }) => (buf_idx, written),
         _ => {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -489,7 +497,7 @@ fn close_connection(
 ) {
     if let Some(conn) = connections.remove(conn_id) {
         // Return write buffer to pool if we have one
-        if let ConnState::Writing { buf_idx, .. } = conn.state {
+        if let ConnPhase::Established(DataState::Writing { buf_idx, .. }) = conn.phase {
             write_buffers.free(buf_idx);
         }
 

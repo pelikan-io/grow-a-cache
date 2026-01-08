@@ -5,6 +5,9 @@
 
 mod buf_ring;
 mod event_loop;
+mod token;
+
+pub(crate) use token::{OpType, TokenAllocator};
 
 use crate::config::Config;
 use crate::runtime::Protocol;

@@ -1,6 +1,6 @@
 ---
 name: milestone-documentation
-description: Use when completing a milestone (v0, v1, ...) to document design decisions, conversation summary, and retrospective for experiment tracking. Also use PROACTIVELY before context compaction to preserve discussion details.
+description: Use when asked to document or capture design discussions
 ---
 
 # Milestone Documentation
@@ -11,17 +11,16 @@ This project tracks an experiment in AI-assisted development. Each milestone (v0
 
 ## When to Use
 
-- **BEFORE CONTEXT COMPACTION** — When the conversation is getting long and compaction may occur, proactively write/append the current session's discussion to `docs/v{N}/discussion.md` to preserve details that would otherwise be lost
 - After completing implementation for a milestone
 - Before tagging a release (v0, v1, ...)
-- When user requests milestone documentation
+- When user requests archiving discussion or complete milestone documentation
 
-## Pre-Compaction Discussion Capture
+## Milstone-based Discussion Capture
 
-Long technical discussions contain valuable details that compaction summarizes away. To preserve them:
+Long technical discussions contain valuable details that compaction summarizes away. To preserve them and associate them with the correct milestone:
 
 1. **Detect when context is getting long** — If you've had substantial back-and-forth (10+ exchanges, deep technical exploration), proactively capture it
-2. **Append to discussion.md** — Don't overwrite; append new sections with timestamps/session markers
+2. **Append to discussion.md** — Don't overwrite; append new sections with timestamps/session markers to the current milestone documentation
 3. **Capture while details are fresh** — Include specific numbers, trade-offs discussed, options rejected and why
 4. **Format for future readers** — Someone reading later should understand the exploration, not just the conclusion
 

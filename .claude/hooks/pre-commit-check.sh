@@ -14,6 +14,7 @@ if echo "$COMMAND" | grep -q "^git commit"; then
   echo "  1. cargo fmt --check" >&2
   echo "  2. cargo clippy --all-targets" >&2
   echo "  3. cargo test" >&2
+  echo "  4. Check if architecture diagram needs updating (documentation skill)" >&2
   echo "" >&2
   echo "Use the pre-commit-checks skill for the full workflow." >&2
 fi

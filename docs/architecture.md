@@ -16,9 +16,15 @@ graph TD
 
     runtime --> config
     runtime --> storage
-    runtime --> runtime_protocol[runtime::protocol]
+    runtime --> runtime_request[runtime::request]
 
-    runtime_protocol --> storage
+    runtime_request --> storage
+
+    subgraph runtime_shared[Shared Abstractions]
+        runtime --> buffer
+        runtime --> connection
+        runtime --> runtime_request
+    end
 
     subgraph runtime_backends[Runtime Backends]
         runtime --> uring[uring - Linux io_uring]
@@ -27,12 +33,13 @@ graph TD
 
     uring --> buffer
     uring --> connection
-    uring --> token
-    uring --> buf_ring
-    uring --> runtime_protocol
+    uring --> token[uring::token]
+    uring --> buf_ring[uring::buf_ring]
+    uring --> runtime_request
 
     mio --> buffer
-    mio --> runtime_protocol
+    mio --> connection
+    mio --> runtime_request
 
     protocols --> memcached
     protocols --> resp
@@ -51,20 +58,20 @@ graph TD
 
 - **server**: Tokio-based protocol-agnostic TCP server that accepts connections, manages connection limits via semaphore, dispatches to the configured protocol handler, and runs a background expiration cleanup task.
 
-- **runtime**: Custom high-performance networking runtimes for Linux and macOS.
+- **runtime**: Custom high-performance networking runtimes for Linux and macOS, with shared abstractions for connection state and buffer management.
+  - **buffer**: Per-worker buffer pool for efficient memory management (shared).
+  - **connection**: Connection state machine with control plane (ConnPhase: Accepting→Handshaking→Established→Closing) and data plane (DataState: Reading↔Writing) separation (shared).
+  - **request**: Protocol request dispatch adapters for native runtimes (shared).
   - **uring** (Linux only): io_uring-based completion I/O with provided buffer rings (kernel 5.19+).
     - **buf_ring**: Kernel-managed buffer selection for zero-copy reads.
-    - **connection**: Connection state machine for tracking read/write progress.
     - **token**: Operation tracking for correlating completions with requests.
   - **mio** (Linux + macOS): Readiness-based I/O using mio (epoll on Linux, kqueue on macOS).
-  - **buffer**: Per-worker buffer pool for efficient memory management.
-  - **protocol**: Protocol processing shared by all native runtimes.
 
 - **protocols**: Parent module that re-exports protocol-specific handlers; each protocol is a self-contained vertical slice.
   - **memcached**: Memcached text protocol implementation with parser (commands, responses) and handler (command execution against storage).
   - **resp**: Redis RESP2/3 protocol implementation with parser (frame types) and handler (GET, SET, DEL, PING, HELLO, COMMAND).
-  - **ping**: Simple ping/pong test protocol.
-  - **echo**: Echo test protocol.
+  - **ping**: Simple ping/pong test protocol for health checks and latency measurement.
+  - **echo**: Length-prefixed echo test protocol for throughput testing.
 
 - **storage**: Thread-safe in-memory key-value store with automatic expiration, LRU eviction when memory limits are reached, and CAS (compare-and-swap) support.
 

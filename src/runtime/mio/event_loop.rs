@@ -5,8 +5,8 @@
 //! Uses epoll on Linux, kqueue on macOS.
 
 use crate::config::Config;
-use crate::runtime::protocol::{process_echo, process_memcached, process_ping, process_resp};
-use crate::runtime::{BufferPool, ProcessResult, Protocol};
+use crate::runtime::request::{process_echo, process_memcached, process_ping, process_resp};
+use crate::runtime::{BufferPool, DataState, ProcessResult, Protocol};
 use crate::storage::Storage;
 use mio::net::{TcpListener, TcpStream};
 use mio::{Events, Interest, Poll, Token};
@@ -19,27 +19,14 @@ use tracing::{debug, error, info, warn};
 
 const LISTENER_TOKEN: Token = Token(usize::MAX);
 
-/// Connection state for mio backend.
-#[derive(Debug, Clone, Copy)]
-enum ConnState {
-    /// Waiting for data to be read.
-    Reading {
-        /// Bytes already read into buffer.
-        filled: usize,
-    },
-    /// Writing response data.
-    Writing {
-        /// Bytes already written.
-        written: usize,
-        /// Total bytes to write.
-        total: usize,
-    },
-}
-
 /// Per-worker connection state for mio backend.
+///
+/// Uses shared `DataState` for read/write state tracking,
+/// but wraps the mio `TcpStream` directly.
 struct MioConnection {
     stream: TcpStream,
-    state: ConnState,
+    /// Data plane state (reading/writing)
+    data_state: DataState,
     read_buf_idx: usize,
     write_buf_idx: usize,
     protocol: Protocol,
@@ -186,7 +173,7 @@ fn accept_connections(
 
                 let conn_id = connections.insert(MioConnection {
                     stream,
-                    state: ConnState::Reading { filled: 0 },
+                    data_state: DataState::reading(),
                     read_buf_idx,
                     write_buf_idx,
                     protocol,
@@ -253,8 +240,8 @@ fn handle_readable(
         .get_mut(conn_id)
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "connection not found"))?;
 
-    let filled = match conn.state {
-        ConnState::Reading { filled } => filled,
+    let filled = match conn.data_state {
+        DataState::Reading { filled } => filled,
         _ => return Ok(()), // Not in reading state
     };
 
@@ -297,9 +284,7 @@ fn handle_readable(
     match result {
         ProcessResult::NeedData => {
             // Need more data, stay in reading state with updated fill level
-            conn.state = ConnState::Reading {
-                filled: total_filled,
-            };
+            conn.data_state = DataState::reading_with(total_filled);
             // Already registered for readable
         }
         ProcessResult::Response {
@@ -318,10 +303,7 @@ fn handle_readable(
                 .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "connection not found"))?;
 
             // Transition to writing
-            conn.state = ConnState::Writing {
-                written: 0,
-                total: response_len,
-            };
+            conn.data_state = DataState::writing(write_buf_idx, response_len);
 
             // Register for writable
             poll.registry()
@@ -353,12 +335,14 @@ fn handle_writable(
         .get_mut(conn_id)
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "connection not found"))?;
 
-    let (written, total) = match conn.state {
-        ConnState::Writing { written, total } => (written, total),
+    let (write_buf_idx, written, total) = match conn.data_state {
+        DataState::Writing {
+            buf_idx,
+            written,
+            total,
+        } => (buf_idx, written, total),
         _ => return Ok(()), // Not in writing state
     };
-
-    let write_buf_idx = conn.write_buf_idx;
 
     let buf = buffers.get(write_buf_idx);
     let n = match conn.stream.write(&buf[written..total]) {
@@ -378,12 +362,13 @@ fn handle_writable(
     let new_written = written + n;
     if new_written >= total {
         // Write complete, go back to reading
-        conn.state = ConnState::Reading { filled: 0 };
+        conn.data_state = DataState::reading();
         poll.registry()
             .reregister(&mut conn.stream, Token(conn_id), Interest::READABLE)?;
     } else {
         // Partial write, continue
-        conn.state = ConnState::Writing {
+        conn.data_state = DataState::Writing {
+            buf_idx: write_buf_idx,
             written: new_written,
             total,
         };
