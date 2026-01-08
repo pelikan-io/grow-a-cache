@@ -88,14 +88,20 @@ fn worker_loop(
     let buffer_size = config.buffer_size;
     let batch_size = config.batch_size;
 
-    // Calculate ring entries as next power of 2
-    let ring_entries = (max_connections as u16).next_power_of_two();
+    // Calculate ring entries - cap at 4096 to limit memory usage
+    // With 64KB buffers: 4096 * 64KB = 256MB per worker for the read ring
+    let ring_entries = std::cmp::min(
+        (max_connections as u16).next_power_of_two(),
+        4096,
+    );
 
     // Create provided buffer ring for reads (kernel selects buffers)
     let read_buf_ring = BufRing::new(&ring, ring_entries, buffer_size, READ_BGID)?;
 
-    // Create buffer pool for writes (we control allocation)
-    let mut write_buffers = BufferPool::new(max_connections, buffer_size);
+    // Create write buffer pool - smaller than max_connections since not all
+    // connections are writing simultaneously
+    let write_pool_size = std::cmp::min(max_connections, 4096);
+    let mut write_buffers = BufferPool::new(write_pool_size, buffer_size);
 
     let mut connections = ConnectionRegistry::new(max_connections);
     let mut tokens = TokenAllocator::new(max_connections * 2);

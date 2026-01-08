@@ -226,7 +226,7 @@ impl Config {
             runtime: cli.runtime,
             // Runtime defaults (TODO: make configurable)
             ring_size: 4096,
-            buffer_size: 16384, // 16KB per connection
+            buffer_size: 64 * 1024, // 64KB per connection
             max_connections: 10000,
             batch_size: 64,
         })

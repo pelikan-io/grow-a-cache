@@ -118,6 +118,53 @@ test_echo() {
     cleanup
 }
 
+# Test Echo protocol with large payload (32KB)
+# Note: Default buffer size is 64KB, so 32KB payload + header fits
+test_echo_large() {
+    local runtime="$1"
+    local test_name="echo-large-$runtime"
+    local payload_size=32768  # 32KB
+
+    log_info "Testing Echo protocol with 32KB payload ($runtime runtime)"
+
+    cleanup
+    $BINARY --protocol echo --runtime "$runtime" --listen "$LISTEN" --log-level error &
+    sleep 0.5
+
+    if ! wait_for_server; then
+        log_fail "$test_name: server did not start"
+        return
+    fi
+
+    # Generate 32KB of random data and compute its checksum
+    local tmpfile=$(mktemp)
+    local outfile=$(mktemp)
+    dd if=/dev/urandom bs=1024 count=32 2>/dev/null > "$tmpfile"
+    local input_checksum=$(md5sum "$tmpfile" | cut -d' ' -f1)
+
+    # Send: <length>\r\n<data>
+    # The response will be: <length>\r\n<data>
+    {
+        printf '%d\r\n' "$payload_size"
+        cat "$tmpfile"
+    } | nc -q 5 "$HOST" "$PORT" 2>/dev/null > "$outfile"
+
+    # Extract the data portion (skip the length header line)
+    # The response is: "1048576\r\n<data>"
+    local header_len=$((${#payload_size} + 2))  # length digits + \r\n
+    tail -c +$((header_len + 1)) "$outfile" > "${outfile}.data"
+    local output_checksum=$(md5sum "${outfile}.data" | cut -d' ' -f1)
+
+    if [ "$input_checksum" = "$output_checksum" ]; then
+        log_pass "$test_name: 32KB payload echoed correctly"
+    else
+        log_fail "$test_name: checksum mismatch (input: $input_checksum, output: $output_checksum)"
+    fi
+
+    rm -f "$tmpfile" "$outfile" "${outfile}.data"
+    cleanup
+}
+
 # Test Memcached protocol
 test_memcached() {
     local runtime="$1"
@@ -265,6 +312,7 @@ main() {
         echo "--- Runtime: $runtime ---"
         test_ping "$runtime"
         test_echo "$runtime"
+        test_echo_large "$runtime"
         test_memcached "$runtime"
         test_resp "$runtime"
     done
