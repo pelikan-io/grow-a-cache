@@ -29,10 +29,12 @@ pub enum RuntimeType {
     /// Tokio async runtime (default, stable)
     #[default]
     Tokio,
-    /// Custom io_uring/kqueue runtime (experimental)
-    Native,
-    /// mio/epoll runtime (for comparison with io_uring on Linux)
+    /// mio-based runtime (epoll on Linux, kqueue on macOS)
     Mio,
+    /// io_uring runtime (Linux only, requires kernel 5.19+)
+    #[value(name = "uring")]
+    #[serde(rename = "uring")]
+    IoUring,
 }
 
 /// Command-line arguments for the cache server
@@ -70,7 +72,7 @@ pub struct CliArgs {
     #[arg(long, value_enum, default_value = "memcached")]
     pub protocol: ProtocolType,
 
-    /// Runtime backend (tokio or native)
+    /// Runtime backend
     #[arg(long, value_enum, default_value = "tokio")]
     pub runtime: RuntimeType,
 }

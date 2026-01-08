@@ -80,5 +80,5 @@ graph TD
 | Flag | Linux | macOS | Description |
 |------|-------|-------|-------------|
 | `--runtime tokio` | Tokio (epoll) | Tokio (kqueue) | Stable async runtime (default) |
-| `--runtime native` | io_uring | mio/kqueue | High-performance native I/O |
-| `--runtime mio` | mio/epoll | mio/kqueue | Readiness-based (for comparison) |
+| `--runtime mio` | mio/epoll | mio/kqueue | Readiness-based I/O |
+| `--runtime uring` | io_uring | N/A (error) | Completion-based I/O (Linux 5.19+) |

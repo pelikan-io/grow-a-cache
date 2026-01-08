@@ -44,30 +44,20 @@ fn map_protocol(config_protocol: ProtocolType) -> Protocol {
     }
 }
 
-/// Run the server with native io_uring (Linux) or mio/kqueue (macOS) backend.
-pub fn run(config: Config) -> std::io::Result<()> {
+/// Run the server with io_uring backend (Linux only).
+#[cfg(target_os = "linux")]
+pub fn run_uring(config: Config) -> std::io::Result<()> {
     let storage = Storage::new(config.max_memory, config.default_ttl);
     let protocol = map_protocol(config.protocol);
+    uring::run(config, storage, protocol)
+}
 
-    #[cfg(target_os = "linux")]
-    {
-        uring::run(config, storage, protocol)
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        // macOS uses mio/kqueue for native runtime
-        mio::run(config, storage, protocol)
-    }
-
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        let _ = (storage, protocol);
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "Unsupported platform: only Linux and macOS are supported",
-        ))
-    }
+#[cfg(not(target_os = "linux"))]
+pub fn run_uring(_config: Config) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "io_uring runtime is only available on Linux",
+    ))
 }
 
 /// Run the server with mio backend (epoll on Linux, kqueue on macOS).

@@ -251,7 +251,13 @@ main() {
     cleanup
 
     # Determine available runtimes
-    local runtimes=("native" "mio")
+    # On Linux: test both uring and mio
+    # On macOS: only mio is available
+    if [ "$(uname)" = "Linux" ]; then
+        local runtimes=("uring" "mio")
+    else
+        local runtimes=("mio")
+    fi
 
     # Run tests for each runtime
     for runtime in "${runtimes[@]}"; do
