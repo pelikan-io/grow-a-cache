@@ -17,12 +17,26 @@ const BUFFER_SIZE: usize = 16 * 1024;
 /// RESP command types
 #[derive(Debug)]
 enum RespCommand {
-    Ping { message: Option<Bytes> },
-    Get { key: Bytes },
-    Set { key: Bytes, value: Bytes, ex: Option<u64>, nx: bool, xx: bool },
-    Del { keys: Vec<Bytes> },
-    Hello { version: u8 },
-    Command,  // Redis COMMAND command (for client compatibility)
+    Ping {
+        message: Option<Bytes>,
+    },
+    Get {
+        key: Bytes,
+    },
+    Set {
+        key: Bytes,
+        value: Bytes,
+        ex: Option<u64>,
+        nx: bool,
+        xx: bool,
+    },
+    Del {
+        keys: Vec<Bytes>,
+    },
+    Hello {
+        version: u8,
+    },
+    Command, // Redis COMMAND command (for client compatibility)
 }
 
 /// RESP connection handler
@@ -53,11 +67,9 @@ impl RespHandler {
 
         // First element should be the command name
         let cmd_name = match &frames[0] {
-            Frame::Bulk(Some(data)) => {
-                std::str::from_utf8(data)
-                    .map_err(|_| "ERR invalid command name".to_string())?
-                    .to_uppercase()
-            }
+            Frame::Bulk(Some(data)) => std::str::from_utf8(data)
+                .map_err(|_| "ERR invalid command name".to_string())?
+                .to_uppercase(),
             _ => return Err("ERR expected bulk string for command name".to_string()),
         };
 
@@ -106,11 +118,9 @@ impl RespHandler {
 
                 while i < frames.len() {
                     let opt = match &frames[i] {
-                        Frame::Bulk(Some(data)) => {
-                            std::str::from_utf8(data)
-                                .map_err(|_| "ERR invalid option".to_string())?
-                                .to_uppercase()
-                        }
+                        Frame::Bulk(Some(data)) => std::str::from_utf8(data)
+                            .map_err(|_| "ERR invalid option".to_string())?
+                            .to_uppercase(),
                         _ => return Err("ERR invalid option".to_string()),
                     };
 
@@ -121,12 +131,10 @@ impl RespHandler {
                                 return Err("ERR syntax error".to_string());
                             }
                             let seconds = match &frames[i] {
-                                Frame::Bulk(Some(data)) => {
-                                    std::str::from_utf8(data)
-                                        .map_err(|_| "ERR invalid expire time".to_string())?
-                                        .parse::<u64>()
-                                        .map_err(|_| "ERR invalid expire time".to_string())?
-                                }
+                                Frame::Bulk(Some(data)) => std::str::from_utf8(data)
+                                    .map_err(|_| "ERR invalid expire time".to_string())?
+                                    .parse::<u64>()
+                                    .map_err(|_| "ERR invalid expire time".to_string())?,
                                 Frame::Integer(n) => *n as u64,
                                 _ => return Err("ERR invalid expire time".to_string()),
                             };
@@ -138,26 +146,30 @@ impl RespHandler {
                                 return Err("ERR syntax error".to_string());
                             }
                             let millis = match &frames[i] {
-                                Frame::Bulk(Some(data)) => {
-                                    std::str::from_utf8(data)
-                                        .map_err(|_| "ERR invalid expire time".to_string())?
-                                        .parse::<u64>()
-                                        .map_err(|_| "ERR invalid expire time".to_string())?
-                                }
+                                Frame::Bulk(Some(data)) => std::str::from_utf8(data)
+                                    .map_err(|_| "ERR invalid expire time".to_string())?
+                                    .parse::<u64>()
+                                    .map_err(|_| "ERR invalid expire time".to_string())?,
                                 Frame::Integer(n) => *n as u64,
                                 _ => return Err("ERR invalid expire time".to_string()),
                             };
                             // Convert milliseconds to seconds (rounding up)
-                            ex = Some((millis + 999) / 1000);
+                            ex = Some(millis.div_ceil(1000));
                         }
                         "NX" => nx = true,
                         "XX" => xx = true,
-                        _ => return Err(format!("ERR unsupported option: {}", opt)),
+                        _ => return Err(format!("ERR unsupported option: {opt}")),
                     }
                     i += 1;
                 }
 
-                Ok(RespCommand::Set { key, value, ex, nx, xx })
+                Ok(RespCommand::Set {
+                    key,
+                    value,
+                    ex,
+                    nx,
+                    xx,
+                })
             }
 
             "DEL" => {
@@ -177,12 +189,10 @@ impl RespHandler {
             "HELLO" => {
                 let version = if frames.len() > 1 {
                     match &frames[1] {
-                        Frame::Bulk(Some(data)) => {
-                            std::str::from_utf8(data)
-                                .map_err(|_| "ERR invalid protocol version".to_string())?
-                                .parse::<u8>()
-                                .map_err(|_| "ERR invalid protocol version".to_string())?
-                        }
+                        Frame::Bulk(Some(data)) => std::str::from_utf8(data)
+                            .map_err(|_| "ERR invalid protocol version".to_string())?
+                            .parse::<u8>()
+                            .map_err(|_| "ERR invalid protocol version".to_string())?,
                         Frame::Integer(n) => *n as u8,
                         _ => return Err("ERR invalid protocol version".to_string()),
                     }
@@ -194,19 +204,17 @@ impl RespHandler {
 
             "COMMAND" => Ok(RespCommand::Command),
 
-            _ => Err(format!("ERR unknown command '{}'", cmd_name)),
+            _ => Err(format!("ERR unknown command '{cmd_name}'")),
         }
     }
 
     /// Execute a command and return the response frame
     fn execute(&mut self, cmd: RespCommand) -> Frame {
         match cmd {
-            RespCommand::Ping { message } => {
-                match message {
-                    Some(msg) => Frame::bulk(msg),
-                    None => Frame::simple("PONG"),
-                }
-            }
+            RespCommand::Ping { message } => match message {
+                Some(msg) => Frame::bulk(msg),
+                None => Frame::simple("PONG"),
+            },
 
             RespCommand::Get { key } => {
                 let key_str = match std::str::from_utf8(&key) {
@@ -220,7 +228,13 @@ impl RespHandler {
                 }
             }
 
-            RespCommand::Set { key, value, ex, nx, xx } => {
+            RespCommand::Set {
+                key,
+                value,
+                ex,
+                nx,
+                xx,
+            } => {
                 let key_str = match std::str::from_utf8(&key) {
                     Ok(s) => s,
                     Err(_) => return Frame::error("ERR invalid key encoding"),
@@ -231,7 +245,9 @@ impl RespHandler {
                 // Handle NX/XX conditions
                 let result = if nx && xx {
                     // Both NX and XX is invalid (would never succeed)
-                    return Frame::error("ERR XX and NX options at the same time are not compatible");
+                    return Frame::error(
+                        "ERR XX and NX options at the same time are not compatible",
+                    );
                 } else if nx {
                     // Only set if key doesn't exist
                     self.storage.add(key_str, value.to_vec(), 0, ttl)
@@ -340,7 +356,7 @@ pub async fn handle_connection(
 
             ParseResult::Error(e) => {
                 warn!(error = %e, "RESP parse error");
-                let response = Frame::error(format!("ERR {}", e));
+                let response = Frame::error(format!("ERR {e}"));
                 stream.write_all(&response.encode()).await?;
                 buffer.clear();
             }

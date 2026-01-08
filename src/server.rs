@@ -4,7 +4,7 @@
 //! protocol handler based on configuration.
 
 use crate::config::{Config, ProtocolType};
-use crate::protocols::{memcached, resp};
+use crate::protocols::{echo, memcached, ping, resp};
 use crate::storage::Storage;
 use std::sync::Arc;
 use std::time::Duration;
@@ -36,9 +36,10 @@ impl Server {
 
     /// Start the server and begin accepting connections
     pub async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let listener = TcpListener::bind(&self.config.listen).await?;
+        let addr = format!("{}:{}", self.config.host, self.config.port);
+        let listener = TcpListener::bind(&addr).await?;
         info!(
-            address = %self.config.listen,
+            address = %addr,
             protocol = ?self.config.protocol,
             "Server listening"
         );
@@ -66,9 +67,9 @@ impl Server {
                             ProtocolType::Memcached => {
                                 memcached::handle_connection(stream, storage).await
                             }
-                            ProtocolType::Resp => {
-                                resp::handle_connection(stream, storage).await
-                            }
+                            ProtocolType::Resp => resp::handle_connection(stream, storage).await,
+                            ProtocolType::Ping => ping::handle_connection(stream, storage).await,
+                            ProtocolType::Echo => echo::handle_connection(stream, storage).await,
                         };
 
                         if let Err(e) = result {
@@ -107,17 +108,24 @@ async fn cleanup_task(storage: Arc<Storage>, interval_secs: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::RuntimeType;
 
     #[tokio::test]
     async fn test_server_creation() {
         let config = Config {
-            listen: "127.0.0.1:0".to_string(),
+            host: "127.0.0.1".to_string(),
+            port: 0,
             max_memory: 1024 * 1024,
             default_ttl: 0,
             cleanup_interval: 60,
-            workers: None,
+            workers: 0,
             log_level: "info".to_string(),
             protocol: ProtocolType::Memcached,
+            runtime: RuntimeType::Tokio,
+            ring_size: 4096,
+            buffer_size: 16384,
+            max_connections: 10000,
+            batch_size: 64,
         };
 
         let server = Server::new(config);

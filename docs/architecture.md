@@ -6,27 +6,79 @@
 graph TD
     main --> config
     main --> server
+    main --> runtime
     main --> protocols
     main --> storage
+
     server --> config
     server --> protocols
     server --> storage
+
+    runtime --> config
+    runtime --> storage
+    runtime --> runtime_request[runtime::request]
+
+    runtime_request --> storage
+
+    subgraph runtime_shared[Shared Abstractions]
+        runtime --> buffer
+        runtime --> connection
+        runtime --> runtime_request
+    end
+
+    subgraph runtime_backends[Runtime Backends]
+        runtime --> uring[uring - Linux io_uring]
+        runtime --> mio[mio - epoll/kqueue]
+    end
+
+    uring --> buffer
+    uring --> connection
+    uring --> token[uring::token]
+    uring --> buf_ring[uring::buf_ring]
+    uring --> runtime_request
+
+    mio --> buffer
+    mio --> connection
+    mio --> runtime_request
+
     protocols --> memcached
     protocols --> resp
+    protocols --> ping
+    protocols --> echo
+
     memcached --> storage
     resp --> storage
 ```
 
 ## Module Descriptions
 
-- **main**: Entry point that initializes logging, loads configuration, creates the server instance, and starts the async runtime.
+- **main**: Entry point that initializes logging, loads configuration, and dispatches to the selected runtime (Tokio, native io_uring/kqueue, or mio).
 
-- **config**: Handles configuration loading from CLI arguments (via clap) and TOML files (via serde), with CLI taking precedence; includes `ProtocolType` enum for protocol selection.
+- **config**: Handles configuration loading from CLI arguments (via clap) and TOML files (via serde), with CLI taking precedence. Includes `ProtocolType` enum for protocol selection and `RuntimeType` enum for runtime selection.
 
-- **server**: Protocol-agnostic TCP server that accepts connections, manages connection limits via semaphore, dispatches to the configured protocol handler, and runs a background expiration cleanup task.
+- **server**: Tokio-based protocol-agnostic TCP server that accepts connections, manages connection limits via semaphore, dispatches to the configured protocol handler, and runs a background expiration cleanup task.
+
+- **runtime**: Custom high-performance networking runtimes for Linux and macOS, with shared abstractions for connection state and buffer management.
+  - **buffer**: Per-worker buffer pool for efficient memory management (shared).
+  - **connection**: Connection state machine with control plane (ConnPhase: Accepting→Handshaking→Established→Closing) and data plane (DataState: Reading↔Writing) separation (shared).
+  - **request**: Protocol request dispatch adapters for native runtimes (shared).
+  - **uring** (Linux only): io_uring-based completion I/O with provided buffer rings (kernel 5.19+).
+    - **buf_ring**: Kernel-managed buffer selection for zero-copy reads.
+    - **token**: Operation tracking for correlating completions with requests.
+  - **mio** (Linux + macOS): Readiness-based I/O using mio (epoll on Linux, kqueue on macOS).
 
 - **protocols**: Parent module that re-exports protocol-specific handlers; each protocol is a self-contained vertical slice.
   - **memcached**: Memcached text protocol implementation with parser (commands, responses) and handler (command execution against storage).
   - **resp**: Redis RESP2/3 protocol implementation with parser (frame types) and handler (GET, SET, DEL, PING, HELLO, COMMAND).
+  - **ping**: Simple ping/pong test protocol for health checks and latency measurement.
+  - **echo**: Length-prefixed echo test protocol for throughput testing.
 
 - **storage**: Thread-safe in-memory key-value store with automatic expiration, LRU eviction when memory limits are reached, and CAS (compare-and-swap) support.
+
+## Runtime Options
+
+| Flag | Linux | macOS | Description |
+|------|-------|-------|-------------|
+| `--runtime tokio` | Tokio (epoll) | Tokio (kqueue) | Stable async runtime (default) |
+| `--runtime mio` | mio/epoll | mio/kqueue | Readiness-based I/O |
+| `--runtime uring` | io_uring | N/A (error) | Completion-based I/O (Linux 5.19+) |

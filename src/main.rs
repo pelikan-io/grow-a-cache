@@ -12,22 +12,22 @@
 
 mod config;
 mod protocols;
+mod runtime;
 mod server;
 mod storage;
 
-use config::Config;
+use config::{Config, RuntimeType};
 use server::Server;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load configuration
     let config = Config::load()?;
 
     // Initialize logging
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(&config.log_level));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.log_level));
 
     tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -35,16 +35,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     info!(
-        listen = %config.listen,
+        host = %config.host,
+        port = config.port,
         protocol = ?config.protocol,
+        runtime = ?config.runtime,
         max_memory_mb = config.max_memory / 1024 / 1024,
         default_ttl = config.default_ttl,
         "Starting grow-a-cache server"
     );
 
-    // Create and run the server
-    let server = Server::new(config);
-    server.run().await?;
+    match config.runtime {
+        RuntimeType::Tokio => run_tokio(config),
+        RuntimeType::Mio => run_mio(config),
+        RuntimeType::IoUring => run_uring(config),
+    }
+}
 
+/// Run with Tokio async runtime (stable)
+fn run_tokio(config: Config) -> Result<(), Box<dyn std::error::Error>> {
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        let server = Server::new(config);
+        server.run().await
+    })
+}
+
+/// Run with mio runtime (epoll on Linux, kqueue on macOS)
+fn run_mio(config: Config) -> Result<(), Box<dyn std::error::Error>> {
+    info!("Using mio runtime (epoll/kqueue)");
+    runtime::run_mio(config)?;
+    Ok(())
+}
+
+/// Run with io_uring runtime (Linux only)
+fn run_uring(config: Config) -> Result<(), Box<dyn std::error::Error>> {
+    info!("Using io_uring runtime (Linux only)");
+    runtime::run_uring(config)?;
     Ok(())
 }

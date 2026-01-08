@@ -125,10 +125,10 @@ impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ParseError::Incomplete => write!(f, "Incomplete command"),
-            ParseError::InvalidCommand(msg) => write!(f, "Invalid command: {}", msg),
-            ParseError::KeyTooLong(key) => write!(f, "Key too long: {}", key),
-            ParseError::InvalidNumber(msg) => write!(f, "Invalid number: {}", msg),
-            ParseError::UnknownCommand(cmd) => write!(f, "Unknown command: {}", cmd),
+            ParseError::InvalidCommand(msg) => write!(f, "Invalid command: {msg}"),
+            ParseError::KeyTooLong(key) => write!(f, "Key too long: {key}"),
+            ParseError::InvalidNumber(msg) => write!(f, "Invalid number: {msg}"),
+            ParseError::UnknownCommand(cmd) => write!(f, "Unknown command: {cmd}"),
         }
     }
 }
@@ -228,8 +228,7 @@ impl Parser {
         // Format: <command> <key> <flags> <exptime> <bytes> [noreply]
         if parts.len() < 5 {
             return ParseResult::Error(ParseError::InvalidCommand(format!(
-                "{} requires key, flags, exptime, and bytes",
-                cmd
+                "{cmd} requires key, flags, exptime, and bytes"
             )));
         }
 
@@ -613,7 +612,7 @@ impl Response {
     /// Generate CLIENT_ERROR response
     pub fn client_error(msg: &str) -> BytesMut {
         let mut response = BytesMut::new();
-        response.extend_from_slice(format!("CLIENT_ERROR {}\r\n", msg).as_bytes());
+        response.extend_from_slice(format!("CLIENT_ERROR {msg}\r\n").as_bytes());
         response
     }
 
@@ -621,7 +620,7 @@ impl Response {
     #[allow(dead_code)]
     pub fn server_error(msg: &str) -> BytesMut {
         let mut response = BytesMut::new();
-        response.extend_from_slice(format!("SERVER_ERROR {}\r\n", msg).as_bytes());
+        response.extend_from_slice(format!("SERVER_ERROR {msg}\r\n").as_bytes());
         response
     }
 
@@ -633,26 +632,21 @@ impl Response {
     /// Generate numeric response (for incr/decr)
     pub fn numeric(value: u64) -> BytesMut {
         let mut response = BytesMut::new();
-        response.extend_from_slice(format!("{}\r\n", value).as_bytes());
+        response.extend_from_slice(format!("{value}\r\n").as_bytes());
         response
     }
 
     /// Generate a STAT line
     pub fn stat(name: &str, value: &str) -> BytesMut {
         let mut response = BytesMut::new();
-        response.extend_from_slice(format!("STAT {} {}\r\n", name, value).as_bytes());
+        response.extend_from_slice(format!("STAT {name} {value}\r\n").as_bytes());
         response
     }
 }
 
 /// Find \r\n in buffer
 fn find_crlf(buffer: &[u8]) -> Option<usize> {
-    for i in 0..buffer.len().saturating_sub(1) {
-        if buffer[i] == b'\r' && buffer[i + 1] == b'\n' {
-            return Some(i);
-        }
-    }
-    None
+    (0..buffer.len().saturating_sub(1)).find(|&i| buffer[i] == b'\r' && buffer[i + 1] == b'\n')
 }
 
 #[cfg(test)]
@@ -859,7 +853,7 @@ mod tests {
     #[test]
     fn test_key_too_long() {
         let long_key = "k".repeat(MAX_KEY_LENGTH + 1);
-        let buffer = format!("get {}\r\n", long_key);
+        let buffer = format!("get {long_key}\r\n");
         match Parser::parse(buffer.as_bytes()) {
             ParseResult::Error(ParseError::KeyTooLong(_)) => {}
             _ => panic!("Expected KeyTooLong error"),
@@ -870,7 +864,14 @@ mod tests {
     fn test_parse_incr() {
         let buffer = b"incr counter 5\r\n";
         match Parser::parse(buffer) {
-            ParseResult::Complete(Command::Incr { key, value, noreply }, _) => {
+            ParseResult::Complete(
+                Command::Incr {
+                    key,
+                    value,
+                    noreply,
+                },
+                _,
+            ) => {
                 assert_eq!(key, "counter");
                 assert_eq!(value, 5);
                 assert!(!noreply);
@@ -883,7 +884,14 @@ mod tests {
     fn test_parse_decr() {
         let buffer = b"decr counter 3 noreply\r\n";
         match Parser::parse(buffer) {
-            ParseResult::Complete(Command::Decr { key, value, noreply }, _) => {
+            ParseResult::Complete(
+                Command::Decr {
+                    key,
+                    value,
+                    noreply,
+                },
+                _,
+            ) => {
                 assert_eq!(key, "counter");
                 assert_eq!(value, 3);
                 assert!(noreply);

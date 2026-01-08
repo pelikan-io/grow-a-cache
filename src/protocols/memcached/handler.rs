@@ -79,8 +79,7 @@ pub async fn handle_connection(
                         let data = buffer[command_bytes..command_bytes + data_bytes].to_vec();
 
                         // Execute storage command
-                        let response =
-                            execute_storage_command(&command, &storage, data).await;
+                        let response = execute_storage_command(&command, &storage, data).await;
 
                         // Send response
                         if let Some(response_data) = response {
@@ -140,10 +139,7 @@ fn find_recovery_point(buffer: &[u8]) -> Option<usize> {
 }
 
 /// Execute a non-storage command
-async fn execute_command(
-    command: &Command,
-    storage: &Arc<Storage>,
-) -> Option<BytesMut> {
+async fn execute_command(command: &Command, storage: &Arc<Storage>) -> Option<BytesMut> {
     match command {
         Command::Get { keys } => {
             let keys_ref: Vec<&str> = keys.iter().map(|s| s.as_str()).collect();
@@ -233,7 +229,8 @@ async fn execute_command(
             let stats = storage.stats();
             let mut response = BytesMut::new();
 
-            response.extend_from_slice(&Response::stat("curr_items", &stats.item_count.to_string()));
+            response
+                .extend_from_slice(&Response::stat("curr_items", &stats.item_count.to_string()));
             response.extend_from_slice(&Response::stat("bytes", &stats.memory_used.to_string()));
             response.extend_from_slice(&Response::stat(
                 "limit_maxbytes",
@@ -375,14 +372,18 @@ fn handle_incr_decr(storage: &Arc<Storage>, key: &str, delta: u64, is_incr: bool
             let current_str = match std::str::from_utf8(&item.value) {
                 Ok(s) => s.trim(),
                 Err(_) => {
-                    return Response::client_error("cannot increment or decrement non-numeric value")
+                    return Response::client_error(
+                        "cannot increment or decrement non-numeric value",
+                    )
                 }
             };
 
             let current: u64 = match current_str.parse() {
                 Ok(n) => n,
                 Err(_) => {
-                    return Response::client_error("cannot increment or decrement non-numeric value")
+                    return Response::client_error(
+                        "cannot increment or decrement non-numeric value",
+                    )
                 }
             };
 

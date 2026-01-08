@@ -6,7 +6,7 @@ description = "A memcached-compatible cache server with text protocol support"
 license = "Apache-2.0"
 
 [dependencies]
-# Async runtime
+# Async runtime (kept for protocol handlers during transition)
 tokio = { version = "1", features = ["full"] }
 
 # CLI argument parsing
@@ -25,6 +25,20 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Time handling
 chrono = "0.4"
+
+# Runtime infrastructure
+libc = "0.2"
+slab = "0.4"
+socket2 = { version = "0.5", features = ["all"] }
+
+# Linux io_uring support
+[target.'cfg(target_os = "linux")'.dependencies]
+io-uring = "0.7"
+mio = { version = "1.0", features = ["os-poll", "net"] }
+
+# macOS mio/kqueue support
+[target.'cfg(target_os = "macos")'.dependencies]
+mio = { version = "1.0", features = ["os-poll", "net"] }
 
 [dev-dependencies]
 tokio-test = "0.4"

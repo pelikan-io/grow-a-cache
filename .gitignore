@@ -24,3 +24,7 @@ target
 # Added by cargo
 
 /target
+
+
+# Local Claude settings
+.claude/settings.local.json
