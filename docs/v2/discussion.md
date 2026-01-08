@@ -558,3 +558,68 @@ All tests pass.
 3. **TLS support** — `Handshaking` phase ready but not implemented
 
 ---
+
+## Session: 2026-01-08 - Large Payload Support Analysis
+
+### Context
+Testing revealed that payloads larger than the buffer size (64KB) fail. User requested analysis of what it would take to support streaming/chaining for large values (e.g., 10MB).
+
+### Current Limitation
+
+The native runtimes (io_uring, mio) have a **maximum payload size equal to the buffer size** (currently 64KB). Payloads larger than this return `ProcessResult::Error`.
+
+Root cause: The `process_*` functions expect complete request data in a single buffer:
+```rust
+if response_len > output.len() {
+    return ProcessResult::Error;
+}
+```
+
+### Options for Streaming Support
+
+#### Option 1: Per-connection accumulation buffer (~300-400 lines)
+- Add `read_buf: Vec<u8>` to `Connection` struct
+- Copy data from provided buffers → connection's accumulation buffer
+- Return provided buffers to kernel immediately
+- Process when complete request accumulated
+
+**Pros**: Minimal architectural change
+**Cons**: Extra copy, memory per connection
+
+#### Option 2: Streaming ProcessResult (~500-600 lines) ← RECOMMENDED
+Add new `ProcessResult` variants:
+```rust
+pub enum ProcessResult {
+    NeedData,
+    NeedExactData { total_needed: usize },  // NEW: know exactly how much more
+    Response { consumed: usize, response_len: usize },
+    StreamingResponse {                      // NEW: for large responses
+        consumed: usize,
+        total: usize,
+        chunk: Range<usize>,
+    },
+    Error,
+    Quit,
+}
+```
+
+**Pros**: Clean architecture, enables zero-copy streaming
+**Cons**: More refactoring, touches all protocol implementations
+
+#### Option 3: Echo-specific streaming (~150-200 lines)
+Quick fix for echo protocol only.
+
+**Pros**: Fast to implement
+**Cons**: Doesn't help memcached/resp
+
+### Decision
+
+**Defer to future milestone.** For v2, document the 64KB payload limit. Streaming support (Option 2) is the right long-term approach but requires significant refactoring.
+
+### v2 Known Limitations
+
+1. **Maximum payload size**: 64KB (configurable via `buffer_size`, but memory scales linearly)
+2. **Memory usage per worker**: ~512MB (read ring + write pool at 4096 buffers × 64KB)
+3. **io_uring buffer ring entries capped at 4096** to limit memory
+
+---
