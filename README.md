@@ -13,6 +13,15 @@ Share your thoughts by filing an issue.
 
 A memcached-compatible cache server written in Rust, implementing the text protocol.
 
+## Current Status (v3)
+
+- **Protocols**: Memcached text protocol, RESP (Redis), Echo, Ping
+- **Runtimes**: io_uring (Linux), mio (cross-platform)
+- **Large values**: Configurable max_value_size (default 8MB), early rejection
+- **Buffer management**: Pool-based buffers, BufferChain for large values
+
+See [releases](https://github.com/pelikan-io/grow-a-cache/releases) for milestone history.
+
 ## Features
 
 - **Memcached Text Protocol Support**: Compatible with existing memcached clients
@@ -54,14 +63,17 @@ cargo build --release
 
 ```
 Options:
-  -c, --config <CONFIG>        Path to TOML configuration file
-  -l, --listen <LISTEN>        Address to bind to (e.g., 127.0.0.1:11211)
-  -m, --max-memory <BYTES>     Maximum memory usage in bytes
-  -t, --default-ttl <SECONDS>  Default TTL for items (0 = no expiration)
-  -w, --workers <COUNT>        Number of worker threads
-      --log-level <LEVEL>      Log level (trace, debug, info, warn, error)
-  -h, --help                   Print help
-  -V, --version                Print version
+  -c, --config <CONFIG>              Path to TOML configuration file
+  -l, --listen <LISTEN>              Address to bind to (e.g., 127.0.0.1:11211)
+  -m, --max-memory <BYTES>           Maximum memory usage in bytes
+  -t, --default-ttl <SECONDS>        Default TTL for items (0 = no expiration)
+  -w, --workers <COUNT>              Number of worker threads
+      --protocol <PROTOCOL>          Protocol: memcached, resp, echo, ping
+      --runtime <RUNTIME>            Runtime: uring (Linux), mio (cross-platform)
+      --max-value-size <BYTES>       Maximum value size (default: 8MB)
+      --log-level <LEVEL>            Log level (trace, debug, info, warn, error)
+  -h, --help                         Print help
+  -V, --version                      Print version
 ```
 
 ### Configuration File
@@ -150,11 +162,17 @@ print(memcached_get("hello"))
 
 ```
 src/
-├── main.rs      # Entry point, logging setup
-├── config.rs    # CLI and TOML configuration
-├── protocol.rs  # Memcached text protocol parser
-├── server.rs    # TCP server and connection handling
-└── storage.rs   # In-memory storage with LRU eviction
+├── main.rs          # Entry point, logging setup
+├── config.rs        # CLI and TOML configuration
+├── server.rs        # Server orchestration
+├── storage.rs       # In-memory storage with LRU eviction
+├── protocols/       # Protocol implementations
+│   ├── memcached/   # Memcached text protocol parser
+│   └── resp/        # RESP (Redis) protocol parser
+└── runtime/         # I/O runtime backends
+    ├── mio/         # epoll/kqueue based (cross-platform)
+    ├── uring/       # io_uring based (Linux)
+    └── buffer.rs    # Buffer pool and BufferChain
 ```
 
 ## Memory Management
@@ -163,6 +181,14 @@ src/
 - When memory limit is reached, least recently accessed items are evicted
 - Expired items are cleaned up periodically (configurable interval)
 - Items are also lazily evicted on access if expired
+- Buffer pools provide bounded memory for I/O operations
+- Large values (> buffer_size) use BufferChain for memory-bounded accumulation
+
+## Documentation
+
+- [docs/ASSUMPTIONS.md](docs/ASSUMPTIONS.md) - Design assumptions and constraints
+- [docs/overhead-analysis.md](docs/overhead-analysis.md) - Per-request cost analysis
+- [docs/v3/](docs/v3/) - v3 milestone planning and discussion
 
 ## License
 
