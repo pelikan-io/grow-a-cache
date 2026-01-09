@@ -75,6 +75,10 @@ pub struct CliArgs {
     /// Runtime backend
     #[arg(long, value_enum, default_value = "tokio")]
     pub runtime: RuntimeType,
+
+    /// Maximum value size in bytes (e.g., 10485760 for 10MB)
+    #[arg(long)]
+    pub max_value_size: Option<usize>,
 }
 
 /// TOML configuration file structure
@@ -123,6 +127,9 @@ pub struct StorageConfig {
     /// Interval for running expiration cleanup in seconds
     #[serde(default = "default_cleanup_interval")]
     pub cleanup_interval: u64,
+    /// Maximum value size in bytes
+    #[serde(default = "default_max_value_size")]
+    pub max_value_size: usize,
 }
 
 impl Default for StorageConfig {
@@ -131,6 +138,7 @@ impl Default for StorageConfig {
             max_memory: default_max_memory(),
             default_ttl: 0,
             cleanup_interval: default_cleanup_interval(),
+            max_value_size: default_max_value_size(),
         }
     }
 }
@@ -167,6 +175,10 @@ fn default_log_level() -> String {
     "info".to_string()
 }
 
+fn default_max_value_size() -> usize {
+    8 * 1024 * 1024 // 8MB - intentionally "odd" to avoid confusion with memcached's 1MB slab limit
+}
+
 /// Final resolved configuration
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -185,6 +197,8 @@ pub struct Config {
     pub buffer_size: usize,
     pub max_connections: usize,
     pub batch_size: usize,
+    /// Maximum size for a single value (requests with larger values are rejected)
+    pub max_value_size: usize,
 }
 
 impl Config {
@@ -229,6 +243,9 @@ impl Config {
             buffer_size: 64 * 1024, // 64KB per connection
             max_connections: 10000,
             batch_size: 64,
+            max_value_size: cli
+                .max_value_size
+                .unwrap_or(toml_config.storage.max_value_size),
         })
     }
 }

@@ -126,6 +126,7 @@ mod tests {
             buffer_size: 16384,
             max_connections: 10000,
             batch_size: 64,
+            max_value_size: 8 * 1024 * 1024, // 8MB
         };
 
         let server = Server::new(config);

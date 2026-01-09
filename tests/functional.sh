@@ -165,6 +165,60 @@ test_echo_large() {
     cleanup
 }
 
+# Test Echo protocol with very large payload (1MB)
+# NOTE: Full chained buffer read path is not yet implemented.
+# This test is skipped until multi-buffer read support is implemented.
+test_echo_very_large() {
+    local runtime="$1"
+    local test_name="echo-1mb-$runtime"
+
+    # Skip for now - chained buffer read path not yet implemented
+    log_info "Skipping $test_name: chained buffer read path not yet implemented"
+}
+
+# Test max_value_size rejection
+# Server should reject values larger than max_value_size
+test_max_value_size_rejection() {
+    local runtime="$1"
+    local test_name="max-value-size-$runtime"
+
+    log_info "Testing max_value_size rejection ($runtime runtime)"
+
+    cleanup
+    # Start server with small max_value_size (10KB)
+    $BINARY --protocol echo --runtime "$runtime" --listen "$LISTEN" --log-level error --max-value-size 10240 &
+    sleep 0.5
+
+    if ! wait_for_server; then
+        log_fail "$test_name: server did not start"
+        return
+    fi
+
+    # Try to send a 20KB payload (should be rejected)
+    local payload_size=20480
+    local response
+    response=$(printf '%d\r\n' "$payload_size" | nc -q $TIMEOUT "$HOST" "$PORT" 2>/dev/null | tr -d '\r')
+
+    if echo "$response" | grep -qi "error.*too large"; then
+        log_pass "$test_name: large value correctly rejected"
+    else
+        log_fail "$test_name: expected rejection error, got '$response'"
+    fi
+
+    cleanup
+}
+
+# Test Memcached SET with large value
+# NOTE: Full chained buffer read path is not yet implemented.
+# This test is skipped until multi-buffer read support is implemented.
+test_memcached_large_value() {
+    local runtime="$1"
+    local test_name="memcached-large-$runtime"
+
+    # Skip for now - chained buffer read path not yet implemented
+    log_info "Skipping $test_name: chained buffer read path not yet implemented"
+}
+
 # Test Memcached protocol
 test_memcached() {
     local runtime="$1"
@@ -275,6 +329,38 @@ test_resp() {
     cleanup
 }
 
+# Test RESP max_value_size rejection
+test_resp_max_value_size() {
+    local runtime="$1"
+    local test_name="resp-max-value-size-$runtime"
+
+    log_info "Testing RESP max_value_size rejection ($runtime runtime)"
+
+    cleanup
+    # Start server with small max_value_size (10KB)
+    $BINARY --protocol resp --runtime "$runtime" --listen "$LISTEN" --log-level error --max-value-size 10240 &
+    sleep 0.5
+
+    if ! wait_for_server; then
+        log_fail "$test_name: server did not start"
+        return
+    fi
+
+    # Try to SET a 20KB value (should be rejected)
+    # RESP format: *3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$20480\r\n<20KB data>\r\n
+    local value_size=20480
+    local response
+    response=$(printf '*3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$%d\r\n%s\r\n' "$value_size" "$(head -c $value_size /dev/zero | tr '\0' 'A')" | nc -q $TIMEOUT "$HOST" "$PORT" 2>/dev/null | tr -d '\r')
+
+    if echo "$response" | grep -qi "err.*too large"; then
+        log_pass "$test_name: large value correctly rejected"
+    else
+        log_fail "$test_name: expected rejection error, got '$response'"
+    fi
+
+    cleanup
+}
+
 # Main
 main() {
     echo "========================================"
@@ -313,8 +399,12 @@ main() {
         test_ping "$runtime"
         test_echo "$runtime"
         test_echo_large "$runtime"
+        test_echo_very_large "$runtime"
+        test_max_value_size_rejection "$runtime"
         test_memcached "$runtime"
+        test_memcached_large_value "$runtime"
         test_resp "$runtime"
+        test_resp_max_value_size "$runtime"
     done
 
     # Summary
