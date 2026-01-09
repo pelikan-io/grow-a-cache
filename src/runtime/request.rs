@@ -21,11 +21,25 @@ pub enum Protocol {
 pub enum ProcessResult {
     /// Need more data to complete parsing.
     NeedData,
+    /// Large value detected - need chain buffers for accumulation.
+    /// The event loop should allocate chain buffers and continue reading.
+    NeedChain {
+        /// Bytes consumed by the command header.
+        command_len: usize,
+        /// Expected value size (from command header).
+        value_len: usize,
+    },
     /// Successfully processed, response written to output buffer.
     /// Returns bytes consumed from input.
     Response {
         consumed: usize,
         response_len: usize,
+    },
+    /// Large response that doesn't fit in a single buffer.
+    /// The event loop should use a write chain for this response.
+    LargeResponse {
+        consumed: usize,
+        response_data: Vec<u8>,
     },
     /// Client sent quit command.
     Quit,
@@ -39,7 +53,12 @@ pub enum ProcessResult {
 /// and writes responses to `output`.
 ///
 /// Returns the number of bytes consumed from input and written to output.
-pub fn process_memcached(input: &[u8], output: &mut [u8], storage: &Arc<Storage>) -> ProcessResult {
+pub fn process_memcached(
+    input: &[u8],
+    output: &mut [u8],
+    storage: &Arc<Storage>,
+    max_value_size: usize,
+) -> ProcessResult {
     match Parser::parse(input) {
         ParseResult::Complete(command, consumed) => {
             if matches!(command, Command::Quit) {
@@ -54,8 +73,26 @@ pub fn process_memcached(input: &[u8], output: &mut [u8], storage: &Arc<Storage>
                 | Command::Append { bytes, .. }
                 | Command::Prepend { bytes, .. }
                 | Command::Cas { bytes, .. } => {
+                    // Check max value size
+                    if *bytes > max_value_size {
+                        let response = Response::client_error("value too large");
+                        let len = copy_response(&response, output);
+                        // Consume the command but not the data (connection will be closed)
+                        return ProcessResult::Response {
+                            consumed,
+                            response_len: len,
+                        };
+                    }
+
                     let data_end = consumed + bytes + 2; // +2 for \r\n
                     if input.len() < data_end {
+                        // Check if value is larger than buffer - need chain
+                        if *bytes > output.len() {
+                            return ProcessResult::NeedChain {
+                                command_len: consumed,
+                                value_len: *bytes,
+                            };
+                        }
                         return ProcessResult::NeedData;
                     }
 
@@ -65,6 +102,23 @@ pub fn process_memcached(input: &[u8], output: &mut [u8], storage: &Arc<Storage>
 
                     ProcessResult::Response {
                         consumed: data_end,
+                        response_len: len,
+                    }
+                }
+                Command::Get { .. } | Command::Gets { .. } => {
+                    let response = execute_command(&command, storage);
+
+                    // Check if response fits in output buffer
+                    if response.len() > output.len() {
+                        return ProcessResult::LargeResponse {
+                            consumed,
+                            response_data: response,
+                        };
+                    }
+
+                    let len = copy_response(&response, output);
+                    ProcessResult::Response {
+                        consumed,
                         response_len: len,
                     }
                 }
@@ -83,6 +137,16 @@ pub fn process_memcached(input: &[u8], output: &mut [u8], storage: &Arc<Storage>
             command_bytes,
             data_bytes,
         } => {
+            // Check max value size early
+            if data_bytes > max_value_size {
+                let response = Response::client_error("value too large");
+                let len = copy_response(&response, output);
+                return ProcessResult::Response {
+                    consumed: command_bytes + 2, // Skip past command line
+                    response_len: len,
+                };
+            }
+
             let total_needed = command_bytes + data_bytes + 2;
             if input.len() >= total_needed {
                 // We have enough data, re-parse with data
@@ -100,6 +164,13 @@ pub fn process_memcached(input: &[u8], output: &mut [u8], storage: &Arc<Storage>
                     _ => ProcessResult::NeedData,
                 }
             } else {
+                // Check if we need chain buffers for large value
+                if data_bytes > output.len() {
+                    return ProcessResult::NeedChain {
+                        command_len: command_bytes,
+                        value_len: data_bytes,
+                    };
+                }
                 ProcessResult::NeedData
             }
         }
@@ -111,12 +182,49 @@ pub fn process_memcached(input: &[u8], output: &mut [u8], storage: &Arc<Storage>
 }
 
 /// Process a RESP protocol buffer.
-pub fn process_resp(input: &[u8], output: &mut [u8], storage: &Arc<Storage>) -> ProcessResult {
+pub fn process_resp(
+    input: &[u8],
+    output: &mut [u8],
+    storage: &Arc<Storage>,
+    max_value_size: usize,
+) -> ProcessResult {
     match resp_parser::parse(input) {
         resp_parser::ParseResult::Complete(frame, consumed) => {
+            // Check for large values in SET command
+            if let resp_parser::Frame::Array(Some(args)) = &frame {
+                if args.len() >= 3 {
+                    if let resp_parser::Frame::Bulk(Some(cmd)) = &args[0] {
+                        if cmd.eq_ignore_ascii_case(b"SET") {
+                            if let resp_parser::Frame::Bulk(Some(value)) = &args[2] {
+                                if value.len() > max_value_size {
+                                    let response =
+                                        resp_parser::Frame::error("ERR value too large");
+                                    let encoded = response.encode();
+                                    let len = encoded.len().min(output.len());
+                                    output[..len].copy_from_slice(&encoded[..len]);
+                                    return ProcessResult::Response {
+                                        consumed,
+                                        response_len: len,
+                                    };
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             let response = execute_resp_command(&frame, storage);
             let encoded = response.encode();
-            let len = encoded.len().min(output.len());
+
+            // Check if response fits in output buffer
+            if encoded.len() > output.len() {
+                return ProcessResult::LargeResponse {
+                    consumed,
+                    response_data: encoded.to_vec(),
+                };
+            }
+
+            let len = encoded.len();
             output[..len].copy_from_slice(&encoded[..len]);
 
             ProcessResult::Response {
@@ -186,7 +294,12 @@ pub fn process_ping(input: &[u8], output: &mut [u8], storage: &Arc<Storage>) -> 
 /// - `<length>\r\n<data>` → `<length>\r\n<data>`
 /// - `QUIT\r\n` → close connection
 #[allow(unused_variables)]
-pub fn process_echo(input: &[u8], output: &mut [u8], storage: &Arc<Storage>) -> ProcessResult {
+pub fn process_echo(
+    input: &[u8],
+    output: &mut [u8],
+    storage: &Arc<Storage>,
+    max_value_size: usize,
+) -> ProcessResult {
     // Find line ending for the length prefix
     let line_end = match find_crlf(input) {
         Some(pos) => pos,
@@ -219,10 +332,28 @@ pub fn process_echo(input: &[u8], output: &mut [u8], storage: &Arc<Storage>) -> 
         }
     };
 
+    // Check max value size
+    if length > max_value_size {
+        let err = b"ERROR value too large\r\n";
+        let len = err.len().min(output.len());
+        output[..len].copy_from_slice(&err[..len]);
+        return ProcessResult::Response {
+            consumed: line_end + 2,
+            response_len: len,
+        };
+    }
+
     // Check if we have enough data
     let header_len = line_end + 2; // length line + \r\n
     let total_needed = header_len + length;
     if input.len() < total_needed {
+        // Check if value is larger than buffer - need chain
+        if length > output.len() {
+            return ProcessResult::NeedChain {
+                command_len: header_len,
+                value_len: length,
+            };
+        }
         return ProcessResult::NeedData;
     }
 
@@ -231,8 +362,15 @@ pub fn process_echo(input: &[u8], output: &mut [u8], storage: &Arc<Storage>) -> 
     let header_bytes = response_header.as_bytes();
     let response_len = header_bytes.len() + length;
 
+    // Check if response fits in output buffer
     if response_len > output.len() {
-        return ProcessResult::Error;
+        let mut response_data = Vec::with_capacity(response_len);
+        response_data.extend_from_slice(header_bytes);
+        response_data.extend_from_slice(&input[header_len..total_needed]);
+        return ProcessResult::LargeResponse {
+            consumed: total_needed,
+            response_data,
+        };
     }
 
     output[..header_bytes.len()].copy_from_slice(header_bytes);

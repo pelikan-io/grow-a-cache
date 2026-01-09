@@ -87,6 +87,7 @@ fn worker_loop(
     let max_connections = config.max_connections;
     let buffer_size = config.buffer_size;
     let batch_size = config.batch_size;
+    let max_value_size = config.max_value_size;
 
     // Calculate ring entries - cap at 4096 to limit memory usage
     // With 64KB buffers: 4096 * 64KB = 256MB per worker for the read ring
@@ -98,9 +99,9 @@ fn worker_loop(
     // Create provided buffer ring for reads (kernel selects buffers)
     let read_buf_ring = BufRing::new(&ring, ring_entries, buffer_size, READ_BGID)?;
 
-    // Create write buffer pool - smaller than max_connections since not all
-    // connections are writing simultaneously
-    let write_pool_size = std::cmp::min(max_connections, 4096);
+    // Create write buffer pool - larger to accommodate chain buffers for large values
+    // Base: write buffer per connection + extra for chains
+    let write_pool_size = std::cmp::min(max_connections * 2, 8192);
     let mut write_buffers = BufferPool::new(write_pool_size, buffer_size);
 
     let mut connections = ConnectionRegistry::new(max_connections);
@@ -112,6 +113,7 @@ fn worker_loop(
     info!(
         worker = worker_id,
         ring_entries = ring_entries,
+        max_value_size,
         "Worker started with buffer ring"
     );
 
@@ -169,6 +171,7 @@ fn worker_loop(
                         &read_buf_ring,
                         &mut write_buffers,
                         &storage,
+                        max_value_size,
                     )?;
                 }
                 OpType::Write { conn_id, buf_idx } => {
@@ -242,6 +245,7 @@ fn handle_read(
     read_buf_ring: &BufRing,
     write_buffers: &mut BufferPool,
     storage: &Arc<Storage>,
+    max_value_size: usize,
 ) -> io::Result<()> {
     if result <= 0 {
         // EOF or error: close connection
@@ -270,6 +274,9 @@ fn handle_read(
     };
 
     let n = result as usize;
+    let buffer_size = write_buffers.buffer_size();
+
+    // Get connection state
     let conn = match connections.get_mut(conn_id) {
         Some(c) => c,
         None => {
@@ -279,16 +286,61 @@ fn handle_read(
     };
 
     let protocol = conn.protocol;
+    let accumulated = conn.read_accumulated;
 
-    // Get the read data from the kernel-selected buffer
-    let input = &read_buf_ring.get_buffer_slice(bid)[..n];
+    // Get or allocate accumulation buffer
+    let accum_buf_idx = match conn.read_buf_idx {
+        Some(idx) => idx,
+        None => {
+            // Allocate a buffer for accumulation
+            match write_buffers.alloc() {
+                Some(idx) => {
+                    conn.read_buf_idx = Some(idx);
+                    idx
+                }
+                None => {
+                    warn!(conn_id, "No buffer available for read accumulation");
+                    read_buf_ring.recycle_buffer(bid);
+                    close_connection(connections, write_buffers, conn_id);
+                    return Ok(());
+                }
+            }
+        }
+    };
+
+    // Copy new data from provided buffer to accumulation buffer
+    let new_data = &read_buf_ring.get_buffer_slice(bid)[..n];
+    let total_len = accumulated + n;
+
+    if total_len > buffer_size {
+        // Data exceeds buffer size - would need chained buffers
+        warn!(conn_id, "Read data exceeds buffer size");
+        read_buf_ring.recycle_buffer(bid);
+        close_connection(connections, write_buffers, conn_id);
+        return Ok(());
+    }
+
+    // Copy to accumulation buffer
+    {
+        let accum_buf = write_buffers.get_mut(accum_buf_idx);
+        accum_buf[accumulated..total_len].copy_from_slice(new_data);
+    }
+
+    // Recycle provided buffer now that we've copied the data
+    read_buf_ring.recycle_buffer(bid);
+
+    // Update accumulated count
+    let conn = connections.get_mut(conn_id).unwrap();
+    conn.read_accumulated = total_len;
+
+    // Copy input data to avoid borrow conflict with write buffer allocation
+    let input_copy: Vec<u8> = write_buffers.get(accum_buf_idx)[..total_len].to_vec();
 
     // Allocate a write buffer for the response
     let write_buf_idx = match write_buffers.alloc() {
         Some(idx) => idx,
         None => {
             warn!(conn_id, "No write buffer available");
-            read_buf_ring.recycle_buffer(bid);
             close_connection(connections, write_buffers, conn_id);
             return Ok(());
         }
@@ -296,14 +348,11 @@ fn handle_read(
 
     let write_buf = write_buffers.get_mut(write_buf_idx);
     let result = match protocol {
-        Protocol::Memcached => process_memcached(input, write_buf, storage),
-        Protocol::Resp => process_resp(input, write_buf, storage),
-        Protocol::Ping => process_ping(input, write_buf, storage),
-        Protocol::Echo => process_echo(input, write_buf, storage),
+        Protocol::Memcached => process_memcached(&input_copy, write_buf, storage, max_value_size),
+        Protocol::Resp => process_resp(&input_copy, write_buf, storage, max_value_size),
+        Protocol::Ping => process_ping(&input_copy, write_buf, storage),
+        Protocol::Echo => process_echo(&input_copy, write_buf, storage, max_value_size),
     };
-
-    // Recycle read buffer now that we've processed the data
-    read_buf_ring.recycle_buffer(bid);
 
     // Re-borrow connection after buffer operations
     let conn = match connections.get_mut(conn_id) {
@@ -316,16 +365,30 @@ fn handle_read(
 
     match result {
         ProcessResult::NeedData => {
-            // Need more data - resubmit read
-            // Note: This is a simplified handling; a full implementation would
-            // need to accumulate partial data across multiple reads
+            // Need more data - keep accumulated data and resubmit read
             write_buffers.free(write_buf_idx);
             submit_read(ring, tokens, connections, conn_id)?;
         }
+        ProcessResult::NeedChain { .. } => {
+            // Large value support for io_uring will be added in a follow-up
+            // For now, reject as not implemented
+            warn!(conn_id, "Large value support not yet implemented for io_uring");
+            write_buffers.free(write_buf_idx);
+            close_connection(connections, write_buffers, conn_id);
+        }
         ProcessResult::Response {
-            consumed: _,
+            consumed,
             response_len,
         } => {
+            // Clear accumulated data (or shift unconsumed data to start)
+            if consumed < total_len {
+                let accum_buf = write_buffers.get_mut(accum_buf_idx);
+                accum_buf.copy_within(consumed..total_len, 0);
+                conn.read_accumulated = total_len - consumed;
+            } else {
+                conn.read_accumulated = 0;
+            }
+
             // Transition to writing
             conn.start_writing(write_buf_idx, response_len);
             submit_write(
@@ -336,6 +399,37 @@ fn handle_read(
                 conn_id,
                 response_len,
             )?;
+        }
+        ProcessResult::LargeResponse { consumed, response_data } => {
+            // Clear accumulated data
+            if consumed < total_len {
+                let accum_buf = write_buffers.get_mut(accum_buf_idx);
+                accum_buf.copy_within(consumed..total_len, 0);
+                conn.read_accumulated = total_len - consumed;
+            } else {
+                conn.read_accumulated = 0;
+            }
+
+            // Large response - need to use multiple buffers
+            // For now, copy to write buffer if it fits, otherwise reject
+            if response_data.len() <= write_buffers.buffer_size() {
+                let write_buf = write_buffers.get_mut(write_buf_idx);
+                write_buf[..response_data.len()].copy_from_slice(&response_data);
+                conn.start_writing(write_buf_idx, response_data.len());
+                submit_write(
+                    ring,
+                    tokens,
+                    connections,
+                    write_buffers,
+                    conn_id,
+                    response_data.len(),
+                )?;
+            } else {
+                // TODO: Implement multi-buffer write for io_uring
+                warn!(conn_id, "Large response support not yet implemented for io_uring");
+                write_buffers.free(write_buf_idx);
+                close_connection(connections, write_buffers, conn_id);
+            }
         }
         ProcessResult::Quit => {
             write_buffers.free(write_buf_idx);
@@ -504,6 +598,11 @@ fn close_connection(
     if let Some(conn) = connections.remove(conn_id) {
         // Return write buffer to pool if we have one
         if let ConnPhase::Established(DataState::Writing { buf_idx, .. }) = conn.phase {
+            write_buffers.free(buf_idx);
+        }
+
+        // Return read accumulation buffer to pool if we have one
+        if let Some(buf_idx) = conn.read_buf_idx {
             write_buffers.free(buf_idx);
         }
 

@@ -117,6 +117,12 @@ pub struct Connection {
     pub phase: ConnPhase,
     /// Protocol configured for this connection.
     pub protocol: Protocol,
+    /// Buffer index for accumulating partial reads (io_uring).
+    /// When using provided buffer rings, partial data must be copied to
+    /// a persistent buffer before the provided buffer can be recycled.
+    pub read_buf_idx: Option<usize>,
+    /// Number of bytes accumulated in read_buf_idx.
+    pub read_accumulated: usize,
 }
 
 impl Connection {
@@ -128,6 +134,8 @@ impl Connection {
             fd,
             phase: ConnPhase::established(),
             protocol,
+            read_buf_idx: None,
+            read_accumulated: 0,
         }
     }
 
@@ -140,6 +148,8 @@ impl Connection {
             fd,
             phase: ConnPhase::Accepting,
             protocol,
+            read_buf_idx: None,
+            read_accumulated: 0,
         }
     }
 

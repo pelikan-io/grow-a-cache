@@ -15,7 +15,7 @@ mod connection;
 pub mod request;
 
 // Re-export shared types for use by platform-specific implementations
-pub(crate) use buffer::BufferPool;
+pub(crate) use buffer::{BufferChain, BufferPool, ChainError};
 pub(crate) use connection::{ConnPhase, Connection, ConnectionRegistry, DataState};
 pub(crate) use request::{ProcessResult, Protocol};
 
