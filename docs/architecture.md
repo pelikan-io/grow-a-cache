@@ -4,11 +4,11 @@
 
 ```mermaid
 graph TD
-    main --> config
-    main --> request
-    main --> runtime
-    main --> protocols
     main --> storage
+    main --> request
+    main --> protocols
+    main --> runtime
+    main --> config
 
     request --> protocols
     request --> storage
@@ -37,8 +37,12 @@ graph TD
     mio --> connection
     mio --> request
 
-    protocols --> memcached[memcached::parser]
-    protocols --> resp[resp::parser]
+    subgraph protocol_parsers[Protocol Parsers]
+        protocols --> memcached[memcached::parser]
+        protocols --> resp[resp::parser]
+        protocols --> ping[ping::parser]
+        protocols --> echo[echo::parser]
+    end
 ```
 
 ## Module Descriptions
@@ -60,6 +64,8 @@ graph TD
 - **protocols**: Protocol parser implementations (syntax only, no execution logic).
   - **memcached**: Memcached text protocol parser with `Command` enum, `Parser`, and `Response` formatting.
   - **resp**: Redis RESP2/3 protocol parser with `Frame` types and encoding/decoding.
+  - **ping**: Simple line-based ping/pong protocol for latency testing.
+  - **echo**: Length-prefixed binary echo protocol for throughput testing.
 
 - **storage**: Thread-safe in-memory key-value store with automatic expiration, LRU eviction when memory limits are reached, and CAS (compare-and-swap) support.
 

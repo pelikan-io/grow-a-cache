@@ -7,8 +7,10 @@
 //! - `resp`: Redis RESP protocol for cache operations
 //!
 //! ## Test Protocols
-//! - `ping`: Minimal ping/pong (inline in runtime)
-//! - `echo`: Echo service (inline in runtime)
+//! - `ping`: Minimal ping/pong for latency testing
+//! - `echo`: Length-prefixed echo for throughput testing
 
+pub mod echo;
 pub mod memcached;
+pub mod ping;
 pub mod resp;

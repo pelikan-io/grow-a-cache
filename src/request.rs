@@ -4,7 +4,9 @@
 //! It sits between the I/O runtime (which handles bytes) and the protocol
 //! parsers (which handle syntax), executing commands against storage.
 
+use crate::protocols::echo::parser as echo_parser;
 use crate::protocols::memcached::parser::{Command, ParseResult, Parser, Response};
+use crate::protocols::ping::parser as ping_parser;
 use crate::protocols::resp::parser as resp_parser;
 use crate::storage::{Storage, StorageResult};
 use std::sync::Arc;
@@ -246,46 +248,39 @@ pub fn process_resp(
 /// - `QUIT\r\n` → close connection
 #[allow(unused_variables)]
 pub fn process_ping(input: &[u8], output: &mut [u8], storage: &Arc<Storage>) -> ProcessResult {
-    // Find line ending
-    let line_end = match find_crlf(input) {
-        Some(pos) => pos,
-        None => return ProcessResult::NeedData,
-    };
-
-    let line = &input[..line_end];
-    let consumed = line_end + 2; // include \r\n
-
-    // Parse command (case-insensitive)
-    let response = if line.eq_ignore_ascii_case(b"PING") {
-        b"PONG\r\n".as_slice()
-    } else if line.eq_ignore_ascii_case(b"QUIT") {
-        return ProcessResult::Quit;
-    } else if line.len() > 5
-        && (line[..5].eq_ignore_ascii_case(b"PING ") || line[..5].eq_ignore_ascii_case(b"ping "))
-    {
-        // PING with message: echo back with PONG prefix
-        let msg = &line[5..];
-        let response_len = 5 + msg.len() + 2; // "PONG " + msg + "\r\n"
-        if response_len > output.len() {
-            return ProcessResult::Error;
+    match ping_parser::parse(input) {
+        ping_parser::ParseResult::Complete(cmd, consumed) => match cmd {
+            ping_parser::Command::Ping => {
+                let response = ping_parser::response_pong();
+                let len = response.len().min(output.len());
+                output[..len].copy_from_slice(&response[..len]);
+                ProcessResult::Response {
+                    consumed,
+                    response_len: len,
+                }
+            }
+            ping_parser::Command::PingMsg(msg) => {
+                let response_len = ping_parser::response_pong_msg(&msg, output);
+                if response_len == 0 {
+                    return ProcessResult::Error;
+                }
+                ProcessResult::Response {
+                    consumed,
+                    response_len,
+                }
+            }
+            ping_parser::Command::Quit => ProcessResult::Quit,
+        },
+        ping_parser::ParseResult::Incomplete => ProcessResult::NeedData,
+        ping_parser::ParseResult::Error => {
+            let response = ping_parser::response_error();
+            let len = response.len().min(output.len());
+            output[..len].copy_from_slice(&response[..len]);
+            ProcessResult::Response {
+                consumed: 0, // Error at start, but we need to consume something
+                response_len: len,
+            }
         }
-        output[..5].copy_from_slice(b"PONG ");
-        output[5..5 + msg.len()].copy_from_slice(msg);
-        output[5 + msg.len()..response_len].copy_from_slice(b"\r\n");
-        return ProcessResult::Response {
-            consumed,
-            response_len,
-        };
-    } else {
-        b"ERROR unknown command\r\n".as_slice()
-    };
-
-    let len = response.len().min(output.len());
-    output[..len].copy_from_slice(&response[..len]);
-
-    ProcessResult::Response {
-        consumed,
-        response_len: len,
     }
 }
 
@@ -301,91 +296,69 @@ pub fn process_echo(
     storage: &Arc<Storage>,
     max_value_size: usize,
 ) -> ProcessResult {
-    // Find line ending for the length prefix
-    let line_end = match find_crlf(input) {
-        Some(pos) => pos,
-        None => return ProcessResult::NeedData,
-    };
+    match echo_parser::parse(input) {
+        echo_parser::ParseResult::Complete(cmd) => match cmd {
+            echo_parser::Command::Quit => ProcessResult::Quit,
+            echo_parser::Command::Echo { length, header_len } => {
+                // Check max value size
+                if length > max_value_size {
+                    let err = echo_parser::response_error("value too large");
+                    let len = err.len().min(output.len());
+                    output[..len].copy_from_slice(&err[..len]);
+                    return ProcessResult::Response {
+                        consumed: header_len,
+                        response_len: len,
+                    };
+                }
 
-    let line = &input[..line_end];
+                // Check if we have enough data
+                let total_needed = header_len + length;
+                if input.len() < total_needed {
+                    // Check if value is larger than buffer - need chain
+                    if length > output.len() {
+                        return ProcessResult::NeedChain {
+                            command_len: header_len,
+                            value_len: length,
+                        };
+                    }
+                    return ProcessResult::NeedData;
+                }
 
-    // Check for QUIT
-    if line.eq_ignore_ascii_case(b"QUIT") {
-        return ProcessResult::Quit;
-    }
+                // Echo back: length + \r\n + data
+                let resp_header_len = echo_parser::response_header(length, output);
+                let response_len = resp_header_len + length;
 
-    // Parse length
-    let length_str = match std::str::from_utf8(line) {
-        Ok(s) => s,
-        Err(_) => return ProcessResult::Error,
-    };
+                // Check if response fits in output buffer
+                if response_len > output.len() {
+                    let mut response_data = Vec::with_capacity(response_len);
+                    response_data.extend_from_slice(&output[..resp_header_len]);
+                    response_data.extend_from_slice(&input[header_len..total_needed]);
+                    return ProcessResult::LargeResponse {
+                        consumed: total_needed,
+                        response_data,
+                    };
+                }
 
-    let length: usize = match length_str.parse() {
-        Ok(len) => len,
-        Err(_) => {
-            let err = b"ERROR invalid length\r\n";
+                output[resp_header_len..response_len]
+                    .copy_from_slice(&input[header_len..total_needed]);
+
+                ProcessResult::Response {
+                    consumed: total_needed,
+                    response_len,
+                }
+            }
+        },
+        echo_parser::ParseResult::Incomplete => ProcessResult::NeedData,
+        echo_parser::ParseResult::InvalidLength => {
+            let err = echo_parser::response_error("invalid length");
             let len = err.len().min(output.len());
             output[..len].copy_from_slice(&err[..len]);
-            return ProcessResult::Response {
-                consumed: line_end + 2,
+            ProcessResult::Response {
+                consumed: 0,
                 response_len: len,
-            };
+            }
         }
-    };
-
-    // Check max value size
-    if length > max_value_size {
-        let err = b"ERROR value too large\r\n";
-        let len = err.len().min(output.len());
-        output[..len].copy_from_slice(&err[..len]);
-        return ProcessResult::Response {
-            consumed: line_end + 2,
-            response_len: len,
-        };
     }
-
-    // Check if we have enough data
-    let header_len = line_end + 2; // length line + \r\n
-    let total_needed = header_len + length;
-    if input.len() < total_needed {
-        // Check if value is larger than buffer - need chain
-        if length > output.len() {
-            return ProcessResult::NeedChain {
-                command_len: header_len,
-                value_len: length,
-            };
-        }
-        return ProcessResult::NeedData;
-    }
-
-    // Echo back: length + \r\n + data
-    let response_header = format!("{length}\r\n");
-    let header_bytes = response_header.as_bytes();
-    let response_len = header_bytes.len() + length;
-
-    // Check if response fits in output buffer
-    if response_len > output.len() {
-        let mut response_data = Vec::with_capacity(response_len);
-        response_data.extend_from_slice(header_bytes);
-        response_data.extend_from_slice(&input[header_len..total_needed]);
-        return ProcessResult::LargeResponse {
-            consumed: total_needed,
-            response_data,
-        };
-    }
-
-    output[..header_bytes.len()].copy_from_slice(header_bytes);
-    output[header_bytes.len()..response_len].copy_from_slice(&input[header_len..total_needed]);
-
-    ProcessResult::Response {
-        consumed: total_needed,
-        response_len,
-    }
-}
-
-/// Find \r\n in buffer, returning the position of \r.
-fn find_crlf(buffer: &[u8]) -> Option<usize> {
-    (0..buffer.len().saturating_sub(1)).find(|&i| buffer[i] == b'\r' && buffer[i + 1] == b'\n')
 }
 
 fn execute_command(command: &Command, storage: &Arc<Storage>) -> Vec<u8> {
