@@ -2,48 +2,9 @@
 
 ## Module Dependency Diagram
 
-```mermaid
-graph TD
-    main --> storage
-    main --> request
-    main --> protocols
-    main --> runtime
-    main --> config
+![Architecture](architecture.svg)
 
-    request --> protocols
-    request --> storage
-
-    runtime --> config
-    runtime --> request
-    runtime --> storage
-
-    subgraph runtime_shared[Shared Abstractions]
-        runtime --> buffer
-        runtime --> connection
-    end
-
-    subgraph runtime_backends[Runtime Backends]
-        runtime --> uring[uring - Linux io_uring]
-        runtime --> mio[mio - epoll/kqueue]
-    end
-
-    uring --> buffer
-    uring --> connection
-    uring --> token[uring::token]
-    uring --> buf_ring[uring::buf_ring]
-    uring --> request
-
-    mio --> buffer
-    mio --> connection
-    mio --> request
-
-    subgraph protocol_parsers[Protocol Parsers]
-        protocols --> memcached[memcached::parser]
-        protocols --> resp[resp::parser]
-        protocols --> ping[ping::parser]
-        protocols --> echo[echo::parser]
-    end
-```
+<!-- Source: architecture.d2 -->
 
 ## Module Descriptions
 

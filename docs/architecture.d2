@@ -1,0 +1,67 @@
+# grow-a-cache Architecture
+direction: down
+
+# Top-level modules
+main: main {
+  shape: rectangle
+}
+config: config
+request: request
+storage: storage
+protocols: protocols
+runtime: runtime
+
+# Main dependencies
+main -> config
+main -> request
+main -> runtime
+main -> protocols
+main -> storage
+
+# Request orchestrates protocol + storage
+request -> protocols
+request -> storage
+
+# Runtime dependencies
+runtime -> config
+runtime -> request
+runtime -> storage
+
+# Protocol parsers
+protocols: protocols {
+  memcached: memcached::parser
+  resp: resp::parser
+  ping: ping::parser
+  echo: echo::parser
+}
+
+# Runtime internals
+runtime: runtime {
+  # Shared abstractions
+  buffer: buffer
+  connection: connection
+
+  # Backends
+  backends: Backends {
+    uring: uring {
+      style.fill: "#e8f4e8"
+      label: "uring (Linux)"
+      token: token
+      buf_ring: buf_ring
+    }
+    mio: mio {
+      style.fill: "#e8e8f4"
+      label: "mio (cross-platform)"
+    }
+  }
+
+  # Backend dependencies on shared
+  backends.uring -> buffer
+  backends.uring -> connection
+  backends.mio -> buffer
+  backends.mio -> connection
+}
+
+# Backends use request processing
+runtime.backends.uring -> request
+runtime.backends.mio -> request
