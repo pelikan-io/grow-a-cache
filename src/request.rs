@@ -1,7 +1,8 @@
-//! Request dispatch for the custom runtime.
+//! Request processing layer.
 //!
-//! Provides synchronous request processing that dispatches to protocol handlers
-//! and works with raw byte buffers (no async runtime required).
+//! This module orchestrates protocol parsing and storage operations.
+//! It sits between the I/O runtime (which handles bytes) and the protocol
+//! parsers (which handle syntax), executing commands against storage.
 
 use crate::protocols::memcached::parser::{Command, ParseResult, Parser, Response};
 use crate::protocols::resp::parser as resp_parser;

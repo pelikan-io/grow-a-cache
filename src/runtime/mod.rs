@@ -12,12 +12,11 @@
 
 mod buffer;
 mod connection;
-pub mod request;
 
 // Re-export shared types for use by platform-specific implementations
 pub(crate) use buffer::{BufferChain, BufferPool, ChainError};
 pub(crate) use connection::{ConnPhase, Connection, ConnectionRegistry, DataState};
-pub(crate) use request::{ProcessResult, Protocol};
+pub(crate) use crate::request::{ProcessResult, Protocol};
 
 // io_uring backend (Linux only)
 #[cfg(target_os = "linux")]

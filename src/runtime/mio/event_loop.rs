@@ -11,7 +11,7 @@
 //! values up to `max_value_size`.
 
 use crate::config::Config;
-use crate::runtime::request::{process_echo, process_memcached, process_ping, process_resp};
+use crate::request::{process_echo, process_memcached, process_ping, process_resp};
 use crate::runtime::{BufferChain, BufferPool, ChainError, DataState, ProcessResult, Protocol};
 use crate::storage::Storage;
 use mio::net::{TcpListener, TcpStream};

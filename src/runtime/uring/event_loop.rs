@@ -7,9 +7,7 @@
 
 use super::buf_ring::{BufRing, READ_BGID};
 use crate::config::Config;
-use crate::runtime::request::{
-    process_echo, process_memcached, process_ping, process_resp, ProcessResult,
-};
+use crate::request::{process_echo, process_memcached, process_ping, process_resp, ProcessResult};
 use crate::runtime::{
     BufferPool, ConnPhase, Connection, ConnectionRegistry, DataState, OpType, Protocol,
     TokenAllocator,

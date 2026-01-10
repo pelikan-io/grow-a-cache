@@ -7,7 +7,7 @@
 //! This separation enables future worker specialization (dedicated accept threads)
 //! and TLS handshake support.
 
-use crate::runtime::request::Protocol;
+use crate::request::Protocol;
 use slab::Slab;
 use std::os::unix::io::RawFd;
 

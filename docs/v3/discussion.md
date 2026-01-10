@@ -869,3 +869,107 @@ This is 3-4× more allocator pressure than necessary.
 Full analysis at `docs/overhead-analysis.md`.
 
 ---
+
+## Session: 2026-01-10 - Tokio Removal and Module Restructuring
+
+### Context
+Before closing v3 milestone, cleaned up the codebase by removing tokio runtime and restructuring modules for cleaner separation of concerns.
+
+### Tokio Removal
+
+Removed the tokio async runtime entirely. The project now only supports two synchronous runtimes:
+- **mio** (default): epoll on Linux, kqueue on macOS
+- **io_uring**: Linux only, kernel 5.19+
+
+**Files deleted**:
+- `src/server.rs` - tokio-based server orchestration
+- `src/protocols/memcached/handler.rs` - async connection handler
+- `src/protocols/resp/handler.rs` - async connection handler
+- `src/protocols/ping/handler.rs` - async connection handler
+- `src/protocols/ping/mod.rs`
+- `src/protocols/echo/handler.rs` - async connection handler
+- `src/protocols/echo/mod.rs`
+
+**Dependencies removed**:
+- `tokio = { version = "1", features = ["full"] }`
+- `tokio-test = "0.4"` (dev-dependency)
+
+**Rationale**:
+- The custom mio and io_uring runtimes handle all I/O with unified protocol processing
+- Protocol handlers for ping/echo are simple enough to be inline in `request.rs`
+- Reduces dependency footprint and binary size
+- Eliminates async runtime overhead
+
+### Module Restructuring: request.rs Promotion
+
+Moved `src/runtime/request.rs` to `src/request.rs` (top-level module).
+
+**Before**:
+```
+runtime/
+├── request.rs    # Protocol dispatch + command execution
+├── buffer.rs
+├── connection.rs
+├── mio/
+└── uring/
+```
+
+**After**:
+```
+src/
+├── request.rs    # Protocol dispatch + command execution
+└── runtime/
+    ├── buffer.rs
+    ├── connection.rs
+    ├── mio/
+    └── uring/
+```
+
+**Rationale**:
+The request processing logic is a higher-order function that orchestrates both protocol parsing and storage operations. It doesn't belong inside `runtime/` (which should only care about I/O) or `protocols/` (which should only care about syntax).
+
+The dependency graph now correctly reflects:
+```
+main → config, request, runtime, protocols, storage
+request → protocols, storage
+runtime → config, request, storage
+protocols → (nothing)
+```
+
+This properly separates:
+- **protocols/**: Syntax only (parsing, encoding)
+- **request**: Semantics (command execution, protocol + storage orchestration)
+- **runtime/**: I/O only (read/write bytes)
+
+### Architecture Diagram Updated
+
+Updated `docs/architecture.md` with new module structure:
+
+```mermaid
+graph TD
+    main --> config
+    main --> request
+    main --> runtime
+    main --> protocols
+    main --> storage
+
+    request --> protocols
+    request --> storage
+
+    runtime --> config
+    runtime --> request
+    runtime --> storage
+```
+
+### Changes Summary
+
+| Change | Lines Removed | Lines Added |
+|--------|--------------|-------------|
+| Tokio dependencies | 2 | 0 |
+| server.rs | 135 | 0 |
+| Protocol handlers | ~1200 | 0 |
+| Import updates | ~10 | ~10 |
+| Module declarations | 5 | 1 |
+| **Net** | **~1350** | **~11** |
+
+---
