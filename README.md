@@ -164,15 +164,15 @@ print(memcached_get("hello"))
 src/
 ├── main.rs          # Entry point, logging setup
 ├── config.rs        # CLI and TOML configuration
-├── server.rs        # Server orchestration
 ├── storage.rs       # In-memory storage with LRU eviction
-├── protocols/       # Protocol implementations
+├── protocols/       # Protocol parsers
 │   ├── memcached/   # Memcached text protocol parser
 │   └── resp/        # RESP (Redis) protocol parser
 └── runtime/         # I/O runtime backends
     ├── mio/         # epoll/kqueue based (cross-platform)
     ├── uring/       # io_uring based (Linux)
-    └── buffer.rs    # Buffer pool and BufferChain
+    ├── buffer.rs    # Buffer pool and BufferChain
+    └── request.rs   # Protocol dispatch and execution
 ```
 
 ## Memory Management

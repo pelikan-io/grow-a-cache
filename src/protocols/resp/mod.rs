@@ -2,7 +2,4 @@
 //!
 //! Supports RESP2 by default with RESP3 upgrade via HELLO command.
 
-pub mod handler;
 pub mod parser;
-
-pub use handler::handle_connection;

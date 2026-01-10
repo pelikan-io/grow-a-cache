@@ -26,10 +26,8 @@ pub enum ProtocolType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RuntimeType {
-    /// Tokio async runtime (default, stable)
-    #[default]
-    Tokio,
     /// mio-based runtime (epoll on Linux, kqueue on macOS)
+    #[default]
     Mio,
     /// io_uring runtime (Linux only, requires kernel 5.19+)
     #[value(name = "uring")]
@@ -73,7 +71,7 @@ pub struct CliArgs {
     pub protocol: ProtocolType,
 
     /// Runtime backend
-    #[arg(long, value_enum, default_value = "tokio")]
+    #[arg(long, value_enum, default_value = "mio")]
     pub runtime: RuntimeType,
 
     /// Maximum value size in bytes (e.g., 10485760 for 10MB)

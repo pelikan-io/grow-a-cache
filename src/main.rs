@@ -13,11 +13,9 @@
 mod config;
 mod protocols;
 mod runtime;
-mod server;
 mod storage;
 
 use config::{Config, RuntimeType};
-use server::Server;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -45,19 +43,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     match config.runtime {
-        RuntimeType::Tokio => run_tokio(config),
         RuntimeType::Mio => run_mio(config),
         RuntimeType::IoUring => run_uring(config),
     }
-}
-
-/// Run with Tokio async runtime (stable)
-fn run_tokio(config: Config) -> Result<(), Box<dyn std::error::Error>> {
-    let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(async {
-        let server = Server::new(config);
-        server.run().await
-    })
 }
 
 /// Run with mio runtime (epoll on Linux, kqueue on macOS)

@@ -446,7 +446,9 @@ impl Storage {
         lru_key
     }
 
-    /// Remove all expired items from storage
+    /// Remove all expired items from storage.
+    /// Currently called lazily on access, but provided for future background cleanup.
+    #[allow(dead_code)]
     pub fn cleanup_expired(&self) -> usize {
         let mut expired_keys = Vec::new();
 

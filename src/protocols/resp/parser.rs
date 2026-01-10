@@ -96,6 +96,7 @@ impl Frame {
     }
 
     /// Create an array response
+    #[allow(dead_code)]
     pub fn array(frames: Vec<Frame>) -> Frame {
         Frame::Array(Some(frames))
     }

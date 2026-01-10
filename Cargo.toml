@@ -6,9 +6,6 @@ description = "A memcached-compatible cache server with text protocol support"
 license = "Apache-2.0"
 
 [dependencies]
-# Async runtime (kept for protocol handlers during transition)
-tokio = { version = "1", features = ["full"] }
-
 # CLI argument parsing
 clap = { version = "4", features = ["derive"] }
 
@@ -39,9 +36,6 @@ mio = { version = "1.0", features = ["os-poll", "net"] }
 # macOS mio/kqueue support
 [target.'cfg(target_os = "macos")'.dependencies]
 mio = { version = "1.0", features = ["os-poll", "net"] }
-
-[dev-dependencies]
-tokio-test = "0.4"
 
 [profile.release]
 opt-level = 3
